@@ -11,8 +11,8 @@ contract KeepASecret {
 
   receive() external payable {}
 
-  function guessSecret(bytes32 yourSecret) external {
-    require (_secret == yourSecret, "guess again");
+  function guessSecret(bytes32 guess) payable external {
+    require (_secret == guess, "guess again");
     _secret = keccak256(abi.encodePacked(block.timestamp));
     _owner = payable(msg.sender);
     _owner.transfer(address(this).balance);

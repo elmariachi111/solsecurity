@@ -1,9 +1,9 @@
 module.exports = {
   networks: {
     development: {
-     host: "127.0.0.1",
-     port: 8545,
-     network_id: "*"
+      host: "127.0.0.1",
+      port: 8545,
+      network_id: "*"
     },
     ganache: {
       host: "127.0.0.1",
@@ -15,7 +15,8 @@ module.exports = {
   },
   compilers: {
     solc: {
-      version: "0.8.13",
+      //version: "0.8.13",
+      version: "0.7.6"
     }
   },
   db: {

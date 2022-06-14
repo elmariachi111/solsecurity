@@ -20,4 +20,18 @@ contract NumberOverflows {
 
     payable(msg.sender).transfer(_amount);
   }
+
+  // DO NOT USE!
+  //https://programtheblockchain.com/posts/2018/04/27/avoiding-integer-overflows-safemath-isnt-enough/
+  function batchTransfer(address[] memory receivers, uint256 value) public {
+    uint256 amount = receivers.length * value;
+    //instead: uint256 amount = value.mul(receivers.length);
+
+    require(balances[msg.sender] >= amount);
+
+    balances[msg.sender] = balances[msg.sender].sub(amount);
+    for (uint256 i = 0; i < receivers.length; i++) {
+      balances[receivers[i]] = balances[receivers[i]].add(value);
+    }
+  }
 }

@@ -14,6 +14,10 @@
   "dependencies": {
     "@openzeppelin/contracts": "^3.4.2",
     "chai": "^4.3.6",
-    "ethereum-waffle": "^3.4.4"
+    "ethereum-waffle": "^3.4.4",
+    "solhint": "^3.3.7"
+  },
+  "devDependencies": {
+    "truffle": "^5.5.18"
   }
 }

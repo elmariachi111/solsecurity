@@ -3,5 +3,6 @@
   "editor.tabSize": 2,
   "solidity.formatter": "prettier",
   "solidity.linter": "solhint",
-  "solidity.compileUsingRemoteVersion": "v0.7.6+commit.7338295f"
+  "solidity.compileUsingRemoteVersion": "v0.8.13+commit.abaa5c0e",
+  "solidity.solhintRules": {},
 }

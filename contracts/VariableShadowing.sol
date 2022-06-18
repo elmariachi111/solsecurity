@@ -14,8 +14,8 @@ contract VariableShadowing {
   }
 }
 
-contract ContractDestroyer is VariableShadowing {
-  function destroy() public {
-    selfdestruct(payable(msg.sender));
-  }
-}
+// contract ContractDestroyer is VariableShadowing {
+//   function destroy() public {
+//     selfdestruct(payable(msg.sender));
+//   }
+// }

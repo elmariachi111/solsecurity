@@ -1,7 +1,4 @@
 const { expect } = require("chai");
-const chai = require("chai")
-const { solidity } = require("ethereum-waffle");
-chai.use(solidity);
 
 const ContractDestroyer = artifacts.require("ContractDestroyer.sol");
 

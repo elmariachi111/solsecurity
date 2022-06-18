@@ -38,9 +38,7 @@ contract("Timestamps", accounts => {
     })
 
     await highNoon.draw();
-
-    const hasWon = await highNoon.wins(accounts[0]);
-    expect(hasWon.toNumber()).to.equal(1);
+    expect(await highNoon.gameover()).to.be.true;
   });
 
 });

@@ -1,20 +1,20 @@
 //SPDX-License-Identifier: MIT
 pragma solidity >=0.8.13;
 
-import "@openzeppelin/contracts/utils/Strings.sol";
-
 contract HighNoon {
-  mapping(address => uint256) public wins;
-  uint256 public gameStartsAt;
+  uint256 private _gameStartsAt;
+  bool public gameover = false;
 
-  constructor(uint256 gameStartsAt_) {
-    gameStartsAt = gameStartsAt_;
+  constructor(uint256 gameStartsAt) {
+    _gameStartsAt = gameStartsAt;
   }
 
   function draw() public {
-    require(block.timestamp > gameStartsAt, "not started");
+    require(block.timestamp > _gameStartsAt, "not started");
+    require(!gameover, "someone else has won");
     if (block.timestamp % 43 == 0) {
-      wins[msg.sender]++;
+      gameover = true;
+      //payable(msg.sender).transfer(1 ether);
     } else {
       revert("good luck next time");
     }

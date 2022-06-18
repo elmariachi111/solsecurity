@@ -12,7 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@openzeppelin/contracts": "^3.4.2",
+    "@openzeppelin/contracts": "^4.6.0",
     "chai": "^4.3.6",
     "solhint": "^3.3.7"
   },

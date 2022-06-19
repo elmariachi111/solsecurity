@@ -196,6 +196,10 @@ A far more advanced example of a hard to detect underflow issue can be found in 
 
 [Solidity Security: Comprehensive list of known attack vectors and common anti-patterns](https://blog.sigmaprime.io/solidity-security.html#precision)
 
+TM integer division  [Solidity Best Practices for Smart Contract Security | ConsenSys](https://consensys.net/blog/developers/solidity-best-practices-for-smart-contract-security/)
+
+
+
 ### Constraining method visibility / variable shadowing
 
 Even worse than making wrong assumptions about the effects of visibility modifiers is to simply forget using them.
@@ -487,9 +491,66 @@ https://medium.com/ginar-io/a-review-of-random-number-generator-rng-on-blockchai
 
 ### Event emission & traceability
 
+Logging events is far more than a plain debugging feature of contracts, in fact many services and applications heavily depend on events that are emitted by smart contracts to recover contract state, analyse the state history, trigger actions on user interfaces or monitor activity. It's adviseable to trigger events from functions that modify state so side effects can be read and reacted on by callers. This is particularly useful for transactions that call other contracts during their execution:
+
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+contract TokenIssuer {
+  uint256 internal constant ISSUANCE = 1_000_000;
+  mapping(address => uint256) internal balances;
+
+  event TokensIssued(
+    address indexed caller,
+    address indexed to,
+    uint256 amount,
+    uint256 balance
+  );
+
+  function issueTokens(address to) public returns (uint256) {
+    balances[to] += ISSUANCE;
+
+    emit TokensIssued(msg.sender, to, ISSUANCE, balances[to]);
+    return balances[to];
+  }
+}
+
+contract TokenGranter {
+  TokenIssuer private _issuer;
+
+  constructor(TokenIssuer issuer) {
+    _issuer = issuer;
+  }
+
+  function grantTokens() external returns (uint256) {
+    return _issuer.issueTokens(msg.sender);
+  }
+}
+
+```
+
+`TokenGranter` grants users new tokens by delegating a call to a trusted `TokenIssuer`. Even though `grantTokens` is supposed to  return the current user's token balance, client code cannot access this return value since it will only be determined after block finality has been reached, hence state modifying contract interactions only yield a transaction receipt to their callers. Emitting `TokenIssued` events on the issuer's side lets clients quickly verify the effects of their transactions.
+
+Events can be used to cheaply store state traces that would be highly expensive to store on chain instead (8 gas per byte vs 625 gas). Instead of keeping iterable inverse mappings, e.g. to find all NFTs owned by an user on a contract, indexers simply can replay all transactions and watch for `Transfer` events to build a mapping that can be queried independently from the blockchain. 
+
+Lastly, using events allows monitoring tools to track what's happening on a contract, send alerts and even trigger maintenance events (e.g. pausing withdrawals) in case they find suspicious interactions.
+
+
+
+[A Guide to Events and Logs in Ethereum Smart Contracts | ConsenSys](https://consensys.net/blog/developers/guide-to-events-and-logs-in-ethereum-smart-contracts/)
+
+[Solidity Best Practices for Smart Contract Security | ConsenSys](https://consensys.net/blog/developers/solidity-best-practices-for-smart-contract-security/)
+
+[Events and Logging in Solidity](https://blog.chain.link/events-and-logging-in-solidity/)
+
+[How To Use Events In Solidity | HackerNoon](https://hackernoon.com/how-to-use-events-in-solidity-pe1735t5)
+
 
 
 ### Who is msg.sender & tx.origin
+
+
 
 [Security Considerations &mdash; Solidity 0.8.13 documentation](https://docs.soliditylang.org/en/v0.8.13/security-considerations.html#tx-origin)
 
@@ -927,6 +988,8 @@ https://ethereum.org/en/developers/docs/mev/
 
 [Ethereum transaction reordering: Unfair and harmful? • The Register](https://www.theregister.com/2022/03/31/ethereum_mining_mev/)
 
+[Transaction ordering - HackMD](https://notes.ethereum.org/@holiman/H17hFNWfd)
+
 
 
 ### Front running
@@ -945,6 +1008,10 @@ https://arxiv.org/pdf/1902.05164.pdf
 
 [Known Attacks - Ethereum Smart Contract Best Practices](https://ethereum-contract-security-techniques-and-tips.readthedocs.io/en/latest/known_attacks/#transaction-ordering-dependence-tod-front-running)
 
+https://medium.com/archer-dao/transaction-ordering-affad826e496
+
+
+
 ### Sandwich attacks
 
 https://medium.com/coinmonks/demystify-the-dark-forest-on-ethereum-sandwich-attacks-5a3aec9fa33e
@@ -960,6 +1027,10 @@ https://ethereum.org/en/developers/docs/mev/#mev-examples-sandwich-trading
 #### Leverage MEV infrastructure for the good
 
 https://docs.flashbots.net/
+
+https://docs.edennetwork.io/
+
+
 
 https://medium.com/flashbots/frontrunning-the-mev-crisis-40629a613752
 

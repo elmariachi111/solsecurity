@@ -550,13 +550,52 @@ Lastly, using events allows monitoring tools to track what's happening on a cont
 
 ### Who is msg.sender & tx.origin
 
+Considered an artefact of Ethereum's early days Solidity's `tx.origin` global variable seems to be a very convenient tool to find out about the transaction's original sender by traversing the call stack up to  its initial entrypoint. That's very helpful to find out whether the execution has been triggered by an external account (`require(tx.origin == msg.sender)`) but can become dangerous when being used for authenticating the caller.  `tx.origin` vulnerabilities rely on phishing attacks on priviledged users that are tricked into interacting with another contract that calls the attackable contract on their behalf:
 
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+contract Wallet {
+  address public _owner;
+
+  constructor(address owner) {
+    _owner = owner;
+  }
+
+  receive() external payable {}
+
+  function withdrawAll(address payable recipient) public {
+    //to stay safe: use msg.sender instead
+    require(tx.origin == _owner);
+    recipient.transfer(address(this).balance);
+  }
+}
+
+contract Phisher {
+  Wallet private _attackableWallet;
+  address private _attacker;
+
+  constructor(Wallet wallet, address attacker) {
+    _attackableWallet = wallet;
+    _attacker = attacker;
+  }
+
+  receive() external payable {
+    _attackableWallet.withdrawAll(payable(_attacker));
+  }
+}
+```
+
+When the owner of the `Phisher` contract successfully tricks `Wallet`'s `owner` to interact with one of its methods, e.g. by simply sending some funds, it can call `withdrawAll` without a rejection since the transaction's origin resolves to the wallet's owner.
 
 [Security Considerations &mdash; Solidity 0.8.13 documentation](https://docs.soliditylang.org/en/v0.8.13/security-considerations.html#tx-origin)
 
 [Solidity Security: Comprehensive list of known attack vectors and common anti-patterns](https://blog.sigmaprime.io/solidity-security.html#tx-origin)
 
 [tx.origin - Ethereum Smart Contract Best Practices](https://consensys.github.io/smart-contract-best-practices/development-recommendations/solidity-specific/tx-origin/)
+
+[SWC-115 · Overview](https://swcregistry.io/docs/SWC-115)
 
 ### Replay attacks
 

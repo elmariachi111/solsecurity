@@ -196,9 +196,71 @@ A far more advanced example of a hard to detect underflow issue can be found in 
 
 [Solidity Security: Comprehensive list of known attack vectors and common anti-patterns](https://blog.sigmaprime.io/solidity-security.html#precision)
 
-
-
 ### Constraining method visibility / variable shadowing
+
+Even worse than making wrong assumptions about the effects of visibility modifiers is to simply forget using them.
+
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+contract MethodVisibility {
+  address private owner;
+  bool public paused = false;
+
+  modifier onlyOwner() {
+    require(msg.sender == owner);
+    _;
+  }
+
+  modifier notPaused() {
+    require(paused == false);
+    _;
+  }
+
+  function initialize() public {
+    owner = msg.sender;
+  }
+
+  function togglePause(bool _newVal) public onlyOwner {
+    paused = _newVal;
+  }
+
+  function withdraw() public onlyOwner notPaused {
+    payable(msg.sender).transfer(address(this).balance);
+  }
+}
+```
+
+Using initializers for contracts is pretty common, particularly when writing proxies, composeable or upgradeable contracts. The author of this example unfortunately forgot to constrain calls to the `initialize` method so that **anyone** could set themselves as the contract owner and withdraw funds. The Solidity compiler cannot warn about that issue because it is not aware about the method's intention and so this type of mistake is often overlooked. The default visibility of Solidity contract functions is *public* and since version 0.5 it's mandatory to add a visibility modifier to functions so developers at least are made aware of the issue.
+
+A lesser notable issue is Solidity's feature to shadow contract members in derived contracts. It's even possible to shadow implementations of built in members like `revert` or `selfdestruct`. When deriving from contracts that shadowed those members, child contracts will behave differently as expected. Since 0.5 the Solidity Compiler and solhint is warning users when they write code that shadows builtin symbols.
+
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+contract VariableShadowing {
+  bool public alive = true;
+  uint256 public value = 0;
+
+  function selfdestruct(address payable beneficiary) internal {
+    alive = false;
+  }
+
+  function addValue(uint256 x) public {
+    value += x;
+  }
+}
+
+contract ContractDestroyer is VariableShadowing {
+  function destroy() public {
+    selfdestruct(payable(msg.sender));
+  }
+}
+```
+
+ TM find an OZ sample when shadowing makes sense
 
 [not-so-smart-contracts/unprotected_function at master · crytic/not-so-smart-contracts · GitHub](https://github.com/crytic/not-so-smart-contracts/tree/master/unprotected_function)
 
@@ -212,13 +274,196 @@ https://dasp.co/#item-2
 
 [Recommendations for Smart Contract Security in Solidity - Ethereum Smart Contract Best Practices](https://ethereum-contract-security-techniques-and-tips.readthedocs.io/en/latest/recommendations/#explicitly-mark-visibility-in-functions-and-state-variables)
 
+> execution order: ?
+> 
+> In Solidity, the order of evaluation of sub-expressions is *unspecified*. This
+> means that in `f(g(), h())`, `g()` might get evaluated before `h()` or `h()` might get evaluated before `g()`. Practically, this order is predictable, but
+> Solidity code shouldn’t depend on that behavior between compiler versions. In *most* circumstances `g()` is evaluated before `h()` (left-to-right order),
+> which is also the behavior that most languages specify in their
+> standards. However, in the case of emitting an event with indexed arguments, the
+> arguments are evaluated right-to-left.
+
 ### Locking pragmas
 
 ### Error handling
 
+Solidity comes with a choice of error handling paradigms that compare to concepts of other languages. Most contracts make use of `require` statements with string reasons like this one:
+
+```solidity
+require(n % 2 == 0, "must provide an even number or this fails")
+```
+
+Solidity 0.8.4 introduced support for custom error types that not only allows you to save on gas during deployment (the error strings have to be written on chain) but also become part of the contract ABI, they can carry parameters and can be documented using NatSpec. Also clients that support custom error types get a better idea on what went wrong and translate the error to something meaningful inside the current user context. 
+
+```solidity
+contract SomeContract {
+  /**
+   * @dev mainly used for illustration purposes
+   * @param givenNumber the number that was supposed to be even but wasn't
+   */
+  error NotAnEvenNumber(uint256 givenNumber);
+
+  function addEvenNumber(uint256 evenNumber) public returns (uint256) {
+    if (evenNumber % 2 != 0) {
+      revert NotAnEvenNumber(evenNumber);
+    }
+    //do anything
+    return value;
+  }
+}
+```
+
+A pitfall that's highly recommended to be avoided arises from using low level `call`s to other contracts or using `address.send` instead of `address.transfer`.  Errors thrown during low level calls don't even bubble up to the calling context and must be checked by their boolean return value. Here's an example:
+
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+contract EvenAdder {
+  error NotAnEvenNumber(uint256 givenNumber);
+
+  uint256 public value;
+
+  constructor(uint256 initialValue) {
+    value = initialValue;
+  }
+
+  function addEvenNumber(uint256 evenNumber) public returns (uint256) {
+    if (evenNumber % 2 != 0) {
+      revert NotAnEvenNumber(evenNumber);
+    }
+
+    value += evenNumber;
+    return value;
+  }
+}
+
+contract AdderClient {
+  function addWithContractInterface(EvenAdder adder, uint256 value) public {
+    adder.addEvenNumber(value);
+  }
+
+  function addWithLowLevelCall(address adder, uint256 value) public {
+    bytes memory payload = abi.encodeWithSignature(
+      "addEvenNumber(uint256)",
+      value
+    );
+    (bool success, bytes memory returnData) = adder.call(payload);
+    require(sucess, "something went wrong"); // <-- this is mandatory!
+  }
+}
+```
+
+The `addWithContractInterface` function makes use of a concrete contract interface that's known at compile time. Errors caused by reversions of `addEvenNumber` propagate to the calling context and revert the transactions. In contrast, `addWithLowLevelCall` calls the contract by manually assembling a call payload manually using the method's interface signature at runtime. When`addEvenNumber(uint256)` fails, execution of the calling contract will continue unless it explicitly requires the low level call's return value to be `true`.
+
+When delegating control to other contracts, e.g. to transfer funds between accounts, things get even more hairy. To transfer Ethers, developers have three options: `address.send`, `address.transfer`, `address.call` as illustrated in this example:
+
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+contract MoneyDispatcher {
+  mapping(address => uint256) public deposits;
+
+  function deposit() external payable {
+    deposits[msg.sender] += msg.value;
+  }
+
+  //doesn't revert
+  function transferFundsWithSend(address payable to, uint256 amount) public {
+    bool success = to.send(amount);
+    deposits[msg.sender] -= amount;
+  }
+
+  //doesn't revert
+  function transferFundsWithCall(address payable to, uint256 amount) public {
+    (bool success, bytes memory returnData) = to.call{ value: amount }("");
+    deposits[msg.sender] -= amount;
+  }
+
+  //reverts
+  function transferFundsWithTransfer(address payable to, uint256 amount)
+    public
+  {
+    to.transfer(amount);
+    deposits[msg.sender] -= amount;
+  }
+}
+
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+contract IDontWantYourMoney {
+  error NoMoneyAccepted();
+
+  receive() external payable {
+    revert NoMoneyAccepted();
+  }
+}
+```
+
+When a sender initiates a transfer towards an instance of `IDontWantYourMoney`, only `transferFundsWithTransfer` reverts the transaction. Since the `success` return values remain unchecked, all following statements are executed.
+
+TM link to ERC20 vulnerabilities / check return values
+
+[Recommendations for Smart Contract Security in Solidity - Ethereum Smart Contract Best Practices](https://ethereum-contract-security-techniques-and-tips.readthedocs.io/en/latest/recommendations/#handle-errors-in-external-calls)
+
+[External Calls - Ethereum Smart Contract Best Practices](https://consensys.github.io/smart-contract-best-practices/development-recommendations/general/external-calls/#handle-errors-in-external-calls)
+
+[SWC-104 · Overview](https://swcregistry.io/docs/SWC-104)
+
 https://medium.com/coinmonks/8-security-vulnerabilities-in-ethereum-smart-contracts-that-can-now-be-easily-avoided-dcb7de37a64
 
+[Types &mdash; Solidity 0.8.16 documentation](https://docs.soliditylang.org/en/develop/types.html#members-of-addresses)
+
+[not-so-smart-contracts/unchecked_external_call at master · crytic/not-so-smart-contracts · GitHub](https://github.com/crytic/not-so-smart-contracts/tree/master/unchecked_external_call)
+
+[External Calls - Ethereum Smart Contract Best Practices](https://consensys.github.io/smart-contract-best-practices/development-recommendations/general/external-calls/#handle-errors-in-external-calls)
+
 ### Blockheight, time and randomness
+
+Suprisingly, time is a rather blurry concept on blockchains. All transactions within one block use and carry that block's timestamp which is defined by its miner or validator. The Ethereum protocol restricts the upper bound of a block's timestamp to [15 seconds in the future]([go-ethereum/consensus.go at master · ethereum/go-ethereum · GitHub](https://github.com/ethereum/go-ethereum/blob/master/consensus/ethash/consensus.go#L275)) but practically miners and validators will only build upon blocks that have a reasonably correct time on them. Ethereum's peering protocol even requires miners to sync their machine's time with a correct time source.
+
+Since the precise time at which transactions are executed is unpredictable and unreliable, smart contracts should take great care when relying on `block.timestamp`. Consider this raffle that starts at a given point in time and selects a winner when it's executed at a seemingly random timestamp that can be divided by 43:
+
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+contract HighNoon {
+  uint256 private _gameStartsAt;
+  bool public gameover = false;
+
+  constructor(uint256 gameStartsAt) {
+    _gameStartsAt = gameStartsAt;
+  }
+
+  function draw() public {
+    require(block.timestamp > _gameStartsAt, "not started");
+    require(!gameover, "someone else has won");
+    if (block.timestamp % 43 == 0) {
+      gameover = true;
+      payable(msg.sender).transfer(1 ether);
+    } else {
+      revert("good luck next time");
+    }
+  }
+}
+
+
+```
+
+While usual blockchain users have to trust to luck, block producers can create blocks by selecting a timestamp that's greater than `gameStartsAt` and divisible by 43 for a new block. In the same block they call `draw` themselves and finally publish it slightly ahead of time. The least trustful atom of granular time on an EVM blockchain therefore roughly translates to the blocktime the chain needs to proceed (~14 seconds on mainnet). 
+
+Another approach to lock funds, actions or decisions for a certain minimal amount of time is using the current chain's block height. Since all blocks build on top of each other and the average block time usually doesn't change dramatically, it might be a better measure for passed time in comparison to the use of wall clocks. However, using block heights for time locks doesn't solve the "miner gets it first" issue either, since block producers still can condition their issuance of blocks on the block height they observe.  
+
+In relation, creating forgery-proof randomness on blockchains is practically impossible without an external source of entropy because all effects of blockchains transactions  are deterministically predefined and any random condition can be constructed by parties that understand the requirements. 
+
+There are various approaches that can crate reliable random values, the most battle tested ones being verifiable random functions (VRF) [as supplied by the Chainlink oracle network](https://blog.chain.link/vrf-v2-mainnet-launch/) (e.g. used by [PoolTogether](https://medium.com/pooltogether/using-chainlink-vrf-for-randomness-generation-in-pooltogether-619a4280a7ae)) and RanDAOs which require a timelocked commit reveal scheme powered by several parties (e.g. used in [Eth's consensus layer's beacon chain](https://eth2book.info/altair/part2/building_blocks/randomness)). 
+
+
+
+https://blog.cotten.io/timing-future-events-in-ethereum-5fbbb91264e7
 
 https://dasp.co/#item-8
 
@@ -232,9 +477,17 @@ https://dasp.co/#item-8
 
 [security - How can I securely generate a random number in my smart contract? - Ethereum Stack Exchange](https://ethereum.stackexchange.com/questions/191/how-can-i-securely-generate-a-random-number-in-my-smart-contract)
 
+[Randomness | solidity-patterns](https://fravoll.github.io/solidity-patterns/randomness.html)
+
+https://medium.com/ginar-io/a-review-of-random-number-generator-rng-on-blockchain-fe342d76261b
+
 [Introduction to Chainlink VRF | Chainlink Documentation](https://docs.chain.link/docs/chainlink-vrf/)
 
+[Upgrading Ethereum](https://eth2book.info/altair/part2/building_blocks/randomness)
+
 ### Event emission & traceability
+
+
 
 ### Who is msg.sender & tx.origin
 
@@ -303,6 +556,12 @@ https://medium.com/northwest-nfts/how-to-safely-push-payments-in-smart-contracts
 ### Disclosing signatures / secure commit schemes
 
 [Recommendations for Smart Contract Security in Solidity - Ethereum Smart Contract Best Practices](https://ethereum-contract-security-techniques-and-tips.readthedocs.io/en/latest/recommendations/#remember-that-on-chain-data-is-public)
+
+[How Not to Use ECDSA &#8211; Learning Words](https://yondon.blog/2019/01/01/how-not-to-use-ecdsa/)
+
+https://blog.positive.com/predicting-random-numbers-in-ethereum-smart-contracts-e5358c6b8620
+
+
 
 ### Reacting on unwanted asset deposits
 
@@ -472,6 +731,8 @@ https://twitter.com/CertiKCommunity/status/1461500552467169284
 
 [Getting Started with Smart Contract Fuzzing - ImmuneBytes](https://immunebytes.com/getting-started-with-smart-contract-fuzzing)
 
+[Announcing the Winners of the Underhanded Solidity Contest 2022 | Solidity Blog](https://blog.soliditylang.org/2022/04/09/announcing-the-underhanded-contest-winners-2022/) (-> winner)
+
 ### Mutation testing: test your tests
 
 [GitHub - JoranHonig/vertigo: Mutation Testing for Ethereum Smart Contracts](https://github.com/JoranHonig/vertigo)
@@ -526,6 +787,8 @@ https://tenderly.co/
 
 [Linters and Formatters - Ethereum Smart Contract Best Practices](https://consensys.github.io/smart-contract-best-practices/security-tools/linters-and-formatters/)
 
+https://medium.com/protofire-blog/solhint-an-advanced-linter-for-ethereums-solidity-c6b155aced7b
+
 [General - Ethereum Smart Contract Best Practices](https://consensys.github.io/smart-contract-best-practices/development-recommendations/documentation/general/)
 
 [Best Practices for Smart Contract Development | Yos Riady · Software Craftsman](https://yos.io/2019/11/10/smart-contract-development-best-practices/#write-good-documentation)
@@ -566,6 +829,8 @@ Slither printer:
 
 [GitHub - d-xo/weird-erc20: weird erc20 tokens](https://github.com/d-xo/weird-erc20)
 
+[awesome-buggy-erc20-tokens/ERC20_token_issue_list.md at master · sec-bit/awesome-buggy-erc20-tokens · GitHub](https://github.com/sec-bit/awesome-buggy-erc20-tokens/blob/master/ERC20_token_issue_list.md)
+
 [ERC20 API: An Attack Vector on Approve/TransferFrom Methods - Google Docs](https://docs.google.com/document/d/1YLPtQxZu1UAvO9cZ1O2RPXBbT0mooh4DYKjA_jp-RLM/edit)
 
 ### Price Manipulation and Flashloan attacks
@@ -593,6 +858,8 @@ https://twitter.com/0x5749/status/1476813266462539779
 [Best Practices for Smart Contract Development | Yos Riady · Software Craftsman](https://yos.io/2019/11/10/smart-contract-development-best-practices/#build-with-other-protocols-in-mind)
 
 [building-secure-contracts/token_integration.md at master · crytic/building-secure-contracts · GitHub](https://github.com/crytic/building-secure-contracts/blob/master/development-guidelines/token_integration.md)
+
+### Reorgs
 
 ## Avoid exposing attacks on L2 networks bridges
 
@@ -658,6 +925,10 @@ https://ethereum.org/en/developers/docs/mev/
 
 [Committee-driven MEV smoothing - Economics - Ethereum Research](https://ethresear.ch/t/committee-driven-mev-smoothing/10408)
 
+[Ethereum transaction reordering: Unfair and harmful? • The Register](https://www.theregister.com/2022/03/31/ethereum_mining_mev/)
+
+
+
 ### Front running
 
 - https://dasp.co/#item-7
@@ -667,6 +938,8 @@ https://ethereum.org/en/developers/docs/mev/
 - [Frontrunning - Ethereum Smart Contract Best Practices](https://consensys.github.io/smart-contract-best-practices/attacks/frontrunning/)
 
 - [Outrunning the Frontrunners](https://blog.assembly.sc/outrunning-the-frontrunners/)
+
+https://blog.positive.com/predicting-random-numbers-in-ethereum-smart-contracts-e5358c6b8620
 
 https://arxiv.org/pdf/1902.05164.pdf
 

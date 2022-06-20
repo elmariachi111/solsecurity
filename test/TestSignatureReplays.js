@@ -22,19 +22,20 @@ const createProxy = async (account) => {
 }
 
 const createMalledSig = (signature) => {
-  const r = signature.slice(0, 66)
-  const s = web3.utils.toBN('0x' + signature.slice(66, 130))
-  const v = web3.utils.hexToNumber('0x' + signature.slice(130, 132))
+  const [r, s, v] = [
+    signature.slice(0, 66),
+    web3.utils.toBN('0x' + signature.slice(66, 130)),
+    web3.utils.hexToNumber('0x' + signature.slice(130, 132))
+  ]
 
   const secp256k1n = web3.utils.toBN("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
 
-  const newS = secp256k1n.sub(s);
-  newV = v == 27 ? 28 : 27;
+  const [sx, vx] = [
+    web3.utils.toHex(secp256k1n.sub(s)).substr(2),
+    web3.utils.toHex(v == 27 ? 28 : 27).substr(2)
+  ]
 
-  const sx = web3.utils.toHex(newS).substr(2);
-  const vx = web3.utils.toHex(newV).substr(2);
-  const newSig = r + sx + vx;
-  return newSig;
+  return r + sx + vx;
 }
 
 contract("Signatures", accounts => {
@@ -84,7 +85,18 @@ contract("Signatures", accounts => {
 
   })
 
-  it("can create a valid signature for the same action", async () => {
+  it("signatures are malleable", async () => {
+    const msg = web3.utils.soliditySha3("some text");
+    const signature = await web3.eth.sign(msg, accounts[0]);
+    const malledSignature = createMalledSig(signature);
+    expect(
+      await web3.eth.accounts.recover(msg, signature)
+    ).to.be.equal(
+      await web3.eth.accounts.recover(msg, malledSignature)
+    );
+  });
+
+  it("can use a  malled signature for the same action", async () => {
     const proxy = await createProxy(accounts[0]);
 
     const nonce = 0;
@@ -109,9 +121,12 @@ contract("Signatures", accounts => {
       from: accounts[2]
     });
 
+    await expectRevert(proxy.payWithMalleableSignature(accounts[0], accounts[1], amount, mSig, nonce, {
+      from: accounts[2]
+    }), "signature already used");
+
     const bal = await proxy.balances(accounts[1])
     expect(web3.utils.fromWei(bal, 'ether')).to.equal("0.5");
-
   });
 
 });

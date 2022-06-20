@@ -50,8 +50,8 @@ contract PaymentProxy {
     bytes32 message = prefixed(
       keccak256(abi.encodePacked(from, to, amount, nonce))
     );
-    bytes32 txid = keccak256(abi.encodePacked(message, signature));
-    require(!signatureUsed[txid], "signature already used");
+    bytes32 sigid = keccak256(abi.encodePacked(message, signature));
+    require(!signatureUsed[sigid], "signature already used");
 
     address recovered = ecrecover(message, v, r, s);
     require(
@@ -63,6 +63,7 @@ contract PaymentProxy {
       "insufficient funds"
     );
 
+    signatureUsed[sigid] = true;
     balances[from] -= amount;
     balances[to] += amount;
   }

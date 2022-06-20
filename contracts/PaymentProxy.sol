@@ -4,6 +4,7 @@ pragma solidity >=0.8.13;
 contract PaymentProxy {
   mapping(address => uint256) public balances;
   mapping(address => uint256) public nonces;
+  mapping(bytes32 => bool) public signatureUsed;
 
   receive() external payable {
     balances[msg.sender] += msg.value;
@@ -34,6 +35,36 @@ contract PaymentProxy {
     balances[from] -= amount;
     balances[to] += amount;
     nonces[from] = nonce + 1;
+  }
+
+  //https://swcregistry.io/docs/SWC-117
+  function payWithMalleableSignature(
+    address from,
+    address to,
+    uint256 amount,
+    bytes memory signature,
+    uint256 nonce
+  ) public {
+    (uint8 v, bytes32 r, bytes32 s) = splitSignature(signature);
+
+    bytes32 message = prefixed(
+      keccak256(abi.encodePacked(from, to, amount, nonce))
+    );
+    bytes32 txid = keccak256(abi.encodePacked(message, signature));
+    require(!signatureUsed[txid], "signature already used");
+
+    address recovered = ecrecover(message, v, r, s);
+    require(
+      from == address(recovered),
+      string(abi.encodePacked("bad signature"))
+    );
+    require(
+      balances[from] > 0 && balances[from] - amount >= 0,
+      "insufficient funds"
+    );
+
+    balances[from] -= amount;
+    balances[to] += amount;
   }
 
   function splitSignature(bytes memory sig)

@@ -101,16 +101,16 @@ contract("Signatures", accounts => {
     const malledRecovered = await web3.eth.accounts.recover(msg, mSig);
     expect(malledRecovered).to.equal(recovered);
 
-    // await proxy.payWithSignature(accounts[0], accounts[1], amount, signature, {
-    //   from: accounts[2]
-    // });
+    await proxy.payWithMalleableSignature(accounts[0], accounts[1], amount, signature, nonce, {
+      from: accounts[2]
+    });
 
-    await proxy.payWithSignature(accounts[0], accounts[1], amount, mSig, {
+    await proxy.payWithMalleableSignature(accounts[0], accounts[1], amount, mSig, nonce, {
       from: accounts[2]
     });
 
     const bal = await proxy.balances(accounts[1])
-    expect(web3.utils.fromWei(bal, 'ether')).to.equal("0.25");
+    expect(web3.utils.fromWei(bal, 'ether')).to.equal("0.5");
 
   });
 

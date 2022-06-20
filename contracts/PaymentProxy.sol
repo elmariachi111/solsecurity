@@ -3,6 +3,7 @@ pragma solidity >=0.8.13;
 
 contract PaymentProxy {
   mapping(address => uint256) public balances;
+  mapping(address => uint256) public nonces;
 
   receive() external payable {
     balances[msg.sender] += msg.value;
@@ -15,11 +16,15 @@ contract PaymentProxy {
     bytes memory signature
   ) public {
     (uint8 v, bytes32 r, bytes32 s) = splitSignature(signature);
-    bytes32 message = prefixed(keccak256(abi.encodePacked(from, to, amount)));
+    uint256 nonce = nonces[from];
+
+    bytes32 message = prefixed(
+      keccak256(abi.encodePacked(from, to, amount, nonce))
+    );
     address recovered = ecrecover(message, v, r, s);
     require(
       from == address(recovered),
-      string(abi.encode("from is not signer", from))
+      string(abi.encodePacked("bad signature"))
     );
     require(
       balances[from] > 0 && balances[from] - amount >= 0,
@@ -28,6 +33,7 @@ contract PaymentProxy {
 
     balances[from] -= amount;
     balances[to] += amount;
+    nonces[from] = nonce + 1;
   }
 
   function splitSignature(bytes memory sig)
@@ -53,7 +59,6 @@ contract PaymentProxy {
     return (v, r, s);
   }
 
-  /// builds a prefixed hash to mimic the behavior of eth_sign.
   function prefixed(bytes32 hash) internal pure returns (bytes32) {
     return
       keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));

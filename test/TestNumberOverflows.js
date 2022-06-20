@@ -34,7 +34,8 @@ contract("NumberOverflows", accounts => {
 
     await expectRevert(
       instance.withdraw(web3.utils.toWei("1", "ether"), { from: accounts[1] }),
-      "SafeMath: subtraction overflow"
+      "Panic: Arithmetic overflow" // Sol > 0.8
+      //"SafeMath: subtraction overflow" // Sol < 0.8
     )
 
   })

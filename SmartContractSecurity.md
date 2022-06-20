@@ -198,8 +198,6 @@ A far more advanced example of a hard to detect underflow issue can be found in 
 
 TM integer division  [Solidity Best Practices for Smart Contract Security | ConsenSys](https://consensys.net/blog/developers/solidity-best-practices-for-smart-contract-security/) [GitHub - sigp/solidity-security-blog: Comprehensive list of known attack vectors and common anti-patterns](https://github.com/sigp/solidity-security-blog#15-floating-points-and-precision)
 
-
-
 ### Constraining method visibility / variable shadowing
 
 Even worse than making wrong assumptions about the effects of visibility modifiers is to simply forget using them.
@@ -453,8 +451,6 @@ contract HighNoon {
     }
   }
 }
-
-
 ```
 
 While usual blockchain users have to trust to luck, block producers can create blocks by selecting a timestamp that's greater than `gameStartsAt` and divisible by 43 for a new block. In the same block they call `draw` themselves and finally publish it slightly ahead of time. The least trustful atom of granular time on an EVM blockchain therefore roughly translates to the blocktime the chain needs to proceed (~14 seconds on mainnet). 
@@ -464,8 +460,6 @@ Another approach to lock funds, actions or decisions for a certain minimal amoun
 In relation, creating forgery-proof randomness on blockchains is practically impossible without an external source of entropy because all effects of blockchains transactions  are deterministically predefined and any random condition can be constructed by parties that understand the requirements. 
 
 There are various approaches that can crate reliable random values, the most battle tested ones being verifiable random functions (VRF) [as supplied by the Chainlink oracle network](https://blog.chain.link/vrf-v2-mainnet-launch/) (e.g. used by [PoolTogether](https://medium.com/pooltogether/using-chainlink-vrf-for-randomness-generation-in-pooltogether-619a4280a7ae)) and RanDAOs which require a timelocked commit reveal scheme powered by several parties (e.g. used in [Eth's consensus layer's beacon chain](https://eth2book.info/altair/part2/building_blocks/randomness)). 
-
-
 
 https://blog.cotten.io/timing-future-events-in-ethereum-5fbbb91264e7
 
@@ -527,7 +521,6 @@ contract TokenGranter {
     return _issuer.issueTokens(msg.sender);
   }
 }
-
 ```
 
 `TokenGranter` grants users new tokens by delegating a call to a trusted `TokenIssuer`. Even though `grantTokens` is supposed to  return the current user's token balance, client code cannot access this return value since it will only be determined after block finality has been reached, hence state modifying contract interactions only yield a transaction receipt to their callers. Emitting `TokenIssued` events on the issuer's side lets clients quickly verify the effects of their transactions.
@@ -536,8 +529,6 @@ Events can be used to cheaply store state traces that would be highly expensive 
 
 Lastly, using events allows monitoring tools to track what's happening on a contract, send alerts and even trigger maintenance events (e.g. pausing withdrawals) in case they find suspicious interactions.
 
-
-
 [A Guide to Events and Logs in Ethereum Smart Contracts | ConsenSys](https://consensys.net/blog/developers/guide-to-events-and-logs-in-ethereum-smart-contracts/)
 
 [Solidity Best Practices for Smart Contract Security | ConsenSys](https://consensys.net/blog/developers/solidity-best-practices-for-smart-contract-security/)
@@ -545,8 +536,6 @@ Lastly, using events allows monitoring tools to track what's happening on a cont
 [Events and Logging in Solidity](https://blog.chain.link/events-and-logging-in-solidity/)
 
 [How To Use Events In Solidity | HackerNoon](https://hackernoon.com/how-to-use-events-in-solidity-pe1735t5)
-
-
 
 ### Who is msg.sender & tx.origin
 
@@ -608,7 +597,7 @@ pragma solidity >=0.8.13;
 //don't use!!
 contract PaymentProxy {
   mapping(address => uint256) public balances;
-  
+
   receive() external payable {
     balances[msg.sender] += msg.value;
   }
@@ -639,7 +628,6 @@ contract PaymentProxy {
     return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
   }
 }
-
 ```
 
 An obvious flaw of this first idea is that one signature can presented several times since the contract doesn't keep track of signature redemptions that it already has seen, like so:
@@ -714,8 +702,6 @@ The best advice for writing replay attack proof contracts, is to rely on battle 
 
 - add chain id and (part of) the contract address to the signed message
 
-
-
 [Security Considerations &mdash; Solidity 0.8.13 documentation](https://docs.soliditylang.org/en/v0.8.13/security-considerations.html#minor-details)
 
 [defcon26/Replay Attacks on Ethereum Smart Contracts.md at master · nkbai/defcon26 · GitHub](https://github.com/nkbai/defcon26/blob/master/docs/Replay%20Attacks%20on%20Ethereum%20Smart%20Contracts.md)
@@ -729,8 +715,6 @@ https://solidity-by-example.org/hacks/signature-replay/
 [What is a Replay Attack?](https://academy.bit2me.com/en/que-es-un-ataque-replay/)
 
 Signature Malleability [SWC-117 · Overview](https://swcregistry.io/docs/SWC-117) [SWC-121 · Overview](https://swcregistry.io/docs/SWC-121) [SWC-122 · Overview](https://swcregistry.io/docs/SWC-122)
-
-
 
 ### Running out of gas
 
@@ -826,8 +810,6 @@ The low-level functions call, delegatecall and staticcall return true as
  their first return value if the called account is non-existent, as part
  of the design of EVM. Existence must be checked prior to calling if 
 desired [Expressions and Control Structures &mdash; Solidity 0.5.8 documentation](https://solidity.readthedocs.io/en/v0.5.8/control-structures.html#error-handling-assert-require-revert-and-exceptions)
-
-
 
 ### Have a fallback withdrawal to avoid locking tokens
 
@@ -935,8 +917,6 @@ https://dasp.co/#item-5
 
 [simple-security-toolkit/development-process.md at main · nascentxyz/simple-security-toolkit · GitHub](https://github.com/nascentxyz/simple-security-toolkit/blob/main/development-process.md)
 
-
-
 ### JS based tests
 
 [simple-security-toolkit/development-process.md at main · nascentxyz/simple-security-toolkit · GitHub](https://github.com/nascentxyz/simple-security-toolkit/blob/main/development-process.md)
@@ -966,8 +946,6 @@ https://twitter.com/CertiKCommunity/status/1461500552467169284
 [building-secure-contracts/program-analysis/manticore at master · crytic/building-secure-contracts · GitHub](https://github.com/crytic/building-secure-contracts/tree/master/program-analysis/manticore)
 
 Other tools: [KnowledgeLists/EthereumSmartContracts.md at master · guylando/KnowledgeLists · GitHub](https://github.com/guylando/KnowledgeLists/blob/master/EthereumSmartContracts.md) 114
-
-
 
 ### Fuzz testing
 
@@ -1087,8 +1065,6 @@ safeTransferFrom will give no indication that transferFrom is not
 implemented in the token and the fallback function will be called 
 instead silently, see: [OpenZeppelin/openzeppelin-contracts#1769](https://github.com/OpenZeppelin/openzeppelin-contracts/issues/1769)
 
-
-
 ### Price Manipulation and Flashloan attacks
 
 https://github.com/Crypto-Virus/cream-finance-exploit-example
@@ -1096,8 +1072,6 @@ https://github.com/Crypto-Virus/cream-finance-exploit-example
 https://twitter.com/0x5749/status/1476813266462539779
 
 https://twitter.com/FortaNetwork/status/1538157731349151746
-
-
 
 ### Avoid trusting onchain oracles
 
@@ -1108,8 +1082,6 @@ https://twitter.com/FortaNetwork/status/1538157731349151746
 [Chapter 11: Oracles - Why Oracles Are Needed - 《Mastering Ethereum》 - 书栈网 · BookStack](https://www.bookstack.cn/read/ethereumbook-en/spilt.1.b0fc44d2ef51cf12.md)
 
 https://twitter.com/shivsakhuja/status/1533205022372089856?s=20&t=dDP7a7m7UNwp8Z9MwRNwaw
-
-
 
 ### Integration samples for external protocols
 
@@ -1149,8 +1121,6 @@ Since [EIP-155](https://eips.ethereum.org/EIPS/eip-155), we also use the chain I
 Atransaction signed for Ethereum cannot be used for Ethereum Classic, 
 and vice versa. Currently, this is only used for signing transaction 
 however, and is not used for signing messages.
-
-
 
 ### Example hacks
 
@@ -1204,8 +1174,6 @@ https://ethereum.org/en/developers/docs/mev/
 
 [Transaction ordering - HackMD](https://notes.ethereum.org/@holiman/H17hFNWfd)
 
-
-
 ### Front running
 
 - https://dasp.co/#item-7
@@ -1223,8 +1191,6 @@ https://arxiv.org/pdf/1902.05164.pdf
 [Known Attacks - Ethereum Smart Contract Best Practices](https://ethereum-contract-security-techniques-and-tips.readthedocs.io/en/latest/known_attacks/#transaction-ordering-dependence-tod-front-running)
 
 https://medium.com/archer-dao/transaction-ordering-affad826e496
-
-
 
 ### Sandwich attacks
 
@@ -1244,8 +1210,6 @@ https://docs.flashbots.net/
 
 https://docs.edennetwork.io/
 
-
-
 https://medium.com/flashbots/frontrunning-the-mev-crisis-40629a613752
 
 - https://dezentralizedfinance.com/top-10-miner-extractable-value-mev-protection-projects-ecosystem/
@@ -1259,5 +1223,3 @@ https://medium.com/@VitalikButerin/i-feel-like-this-post-is-addressing-an-argume
 [MEV Auction: Auctioning transaction ordering rights as a solution to Miner Extractable Value - Economics - Ethereum Research](https://ethresear.ch/t/mev-auction-auctioning-transaction-ordering-rights-as-a-solution-to-miner-extractable-value/6788)
 
 https://twitter.com/hasufl/status/1534211355686879232?s=20&t=dDP7a7m7UNwp8Z9MwRNwaw
-
-

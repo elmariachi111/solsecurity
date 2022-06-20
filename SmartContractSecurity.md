@@ -134,7 +134,7 @@ contract NumberOverflows {
   }
 
   function withdraw(uint256 _amount) public {
-    assert(balances[msg.sender] - _amount >= 0);
+    require(balances[msg.sender] - _amount >= 0);
     balances[msg.sender] -= _amount;
     payable(msg.sender).transfer(_amount);
   }
@@ -143,7 +143,7 @@ contract NumberOverflows {
 
 This contract's `withdraw` method allows any sender to withdraw as much funds as they like because the `balances` value type is an unsigned integer and wraps to `2^256-1` (an astronomically high value) when "dropping" below 0. 
 
-The good news is that Solidity >0.8 added transparent support for this error class and would revert during the execution of the assertion. If you're writing code that requires using a Solidity version below 0.8, you're highly recommended to use one of the publicly available SafeMath implementations for any arithmetic operation, e.g. the one by OpenZeppelin:
+The good news is that Solidity >0.8 added transparent support for this error class and would revert during the execution of the requirement checks. If you're writing code that requires using a Solidity version below 0.8, you're highly recommended to use one of the publicly available SafeMath implementations for any arithmetic operation, e.g. the one by OpenZeppelin:
 
 ```solidity
 pragma solidity <0.8.0;
@@ -154,7 +154,7 @@ contract NumberOverflows {
   using SafeMath for uint256;
   //...
   function withdraw(uint256 _amount) public {
-    assert(balances[msg.sender].sub(_amount) >= 0);
+    require(balances[msg.sender].sub(_amount) >= 0);
     balances[msg.sender] = balances[msg.sender].sub(_amount);
     payable(msg.sender).transfer(_amount);
   }
@@ -196,7 +196,7 @@ A far more advanced example of a hard to detect underflow issue can be found in 
 
 [Solidity Security: Comprehensive list of known attack vectors and common anti-patterns](https://blog.sigmaprime.io/solidity-security.html#precision)
 
-TM integer division  [Solidity Best Practices for Smart Contract Security | ConsenSys](https://consensys.net/blog/developers/solidity-best-practices-for-smart-contract-security/)
+TM integer division  [Solidity Best Practices for Smart Contract Security | ConsenSys](https://consensys.net/blog/developers/solidity-best-practices-for-smart-contract-security/) [GitHub - sigp/solidity-security-blog: Comprehensive list of known attack vectors and common anti-patterns](https://github.com/sigp/solidity-security-blog#15-floating-points-and-precision)
 
 
 
@@ -550,7 +550,7 @@ Lastly, using events allows monitoring tools to track what's happening on a cont
 
 ### Who is msg.sender & tx.origin
 
-Considered an artefact of Ethereum's early days Solidity's `tx.origin` global variable seems to be a very convenient tool to find out about the transaction's original sender by traversing the call stack up to  its initial entrypoint. That's very helpful to find out whether the execution has been triggered by an external account (`require(tx.origin == msg.sender)`) but can become dangerous when being used for authenticating the caller.  `tx.origin` vulnerabilities rely on phishing attacks on priviledged users that are tricked into interacting with another contract that calls the attackable contract on their behalf:
+Considered an artefact of Ethereum's early days Solidity's `tx.origin` global variable seems to be a very convenient tool to find out about the transaction's original sender by traversing the call stack up to  its initial entrypoint. That's very helpful to find out whether the execution has been triggered by an external account (`require(tx.origin == msg.sender)`) but can become dangerous when being used for authenticating the caller.  `tx.origin` vulnerabilities rely on phishing attacks on privileged users that are tricked into interacting with another contract that calls the attackable contract on their behalf:
 
 ```solidity
 //SPDX-License-Identifier: MIT
@@ -597,15 +597,140 @@ When the owner of the `Phisher` contract successfully tricks `Wallet`'s `owner` 
 
 [SWC-115 · Overview](https://swcregistry.io/docs/SWC-115)
 
-### Replay attacks
+### Replay attacks and reusable signatures
+
+Signatures are the core crypto mechanism that make blockchain ecosystem work by proving that a piece of information, e.g. a transaction, originates from some account. When used as unlocking proofs for smart contract functions there are quite a lot caveats to keep in mind. A pretty common application of signatures are gasless transactions, payment channels or relays that allow anyone to execute a transaction on behalf of its original sender. One could also think of them as offchain cheques that can be redeemed in the future. A simple approach to use them could look like this:
+
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+//don't use!!
+contract PaymentProxy {
+  mapping(address => uint256) public balances;
+  
+  receive() external payable {
+    balances[msg.sender] += msg.value;
+  }
+
+  function payWithSignature(address from, address to, uint256 amount, bytes memory signature) public {
+    (uint8 v, bytes32 r, bytes32 s) = splitSignature(signature);
+    bytes32 message = prefixed(
+      keccak256(abi.encodePacked(from, to, amount))
+    );
+    address recovered = ecrecover(message, v, r, s);
+    require(from == address(recovered), "bad signature");
+    require(balances[from] > 0 && balances[from] - amount >= 0, "insufficient funds");
+    balances[from] -= amount;
+    balances[to] += amount;
+  }
+
+  function splitSignature(bytes memory sig) internal pure returns (uint8 v, bytes32 r, bytes32 s)
+  {
+    require(sig.length == 65);
+    assembly {    
+      r := mload(add(sig, 32))
+      s := mload(add(sig, 64))
+      v := byte(0, mload(add(sig, 96)))
+    }
+  }
+
+  function prefixed(bytes32 hash) internal pure returns (bytes32) {
+    return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+  }
+}
+
+```
+
+An obvious flaw of this first idea is that one signature can presented several times since the contract doesn't keep track of signature redemptions that it already has seen, like so:
+
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+contract PaymentProxy {
+  mapping(address => uint256) public balances;
+  mapping(bytes32 => bool) public signatureUsed;
+
+  function payWithSignature(address from, address to, uint256 amount, bytes memory signature) public {
+    (uint8 v, bytes32 r, bytes32 s) = splitSignature(signature);
+    bytes32 message = prefixed(keccak256(abi.encodePacked(from, to, amount)));
+    bytes32 sigid = keccak256(abi.encodePacked(message, signature));
+    require(!signatureUsed[sigid], "signature already used");
+    //...
+    signatureUsed[sigid] = true;
+  }
+}
+```
+
+However, this approach allows attackers to redeem the cheque twice and that's because [ECDSA curve signatures are malleable](https://coders-errand.com/malleability-ecdsa-signatures/). Signatures are points on a symmetric curve and for any statement that's signed, there are two valid signatures that resolve to the same public key. The Ethereum protocol addresses this issue in [EIP-2]([EIP-2: Homestead Hard-fork Changes](https://eips.ethereum.org/EIPS/eip-2)) and allows transaction signatures to be only computed from one side of the curve, but the core `ecrecover` procedure still allows recovering any presented signature.
+
+Here's how one can forge a symmetric valid signature using one they observed on a public ledger:
+
+```javascript
+const createMalledSig = (signature) => {
+  const [r, s, v] = [
+    signature.slice(0, 66),
+    web3.utils.toBN('0x' + signature.slice(66, 130)),
+    web3.utils.hexToNumber('0x' + signature.slice(130, 132))
+  ]
+  const secp256k1n = web3.utils.toBN("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
+  const [sx, vx] = [
+    web3.utils.toHex(secp256k1n.sub(s)).substr(2),
+    web3.utils.toHex(v == 27 ? 28 : 27).substr(2)
+  ]
+  return r + sx + vx;
+}
+```
+
+resulting in two signatures that `ecrecover` resolves to the same address:
+
+```javascript
+it("signatures are malleable", async () => {
+  const msg = web3.utils.soliditySha3("some text");
+  const signature = await web3.eth.sign(msg, accounts[0]);
+  const malledSignature = createMalledSig(signature);
+  expect(
+    await web3.eth.accounts.recover(msg, signature)
+  ).to.be.equal(
+    await web3.eth.accounts.recover(msg, malledSignature)
+  );
+});
+```
+
+Any signature that has been presented to the aforementioned contract can be used again to redeem the same amount of tokens, a vulnerability classified as [SWC-117]([SWC-117 · Overview](https://swcregistry.io/docs/SWC-117)). The advice is to not keep track hashes including the signature value but rather hashes of the presented message and an appropriate `nonce` that users and contracts agree on.
+
+But that's not all. Even if you keep track of signatures that are presented on your contract, they still can be executed on another instance of it. Adding (and verifying) the contract's address to signatures is therefore mandatory. you can use `address(this)` for that purpose when rebuilding the message signature inside the verification code. Lastly, in a multichain environment contracts are likely deployed at the same address on different chains, as made possible by the [CREATE2 opcode]([Expressions and Control Structures &mdash; Solidity 0.8.15 documentation](https://docs.soliditylang.org/en/v0.8.15/control-structures.html#salted-contract-creations-create2)). To avoid replays between the same contracts on different chains, also make sure to include the target chain's id in the signed message.
+
+The best advice for writing replay attack proof contracts, is to rely on battle tested signature primitives, like OpenZeppelin's [ECDSA]([Utilities - OpenZeppelin Docs](https://docs.openzeppelin.com/contracts/4.x/api/utils#ECDSA)) base library and make use of typed signature schemes like [EIP-712]([Utilities - OpenZeppelin Docs](https://docs.openzeppelin.com/contracts/4.x/api/utils#EIP712)) or [EIP-191]([EIPs/eip-191.md at master · ethereum/EIPs · GitHub](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-191.md)) that are also supported by popular wallets. Another example of a recently emerging application that adds a lot of domain data into its signature can be found in [Sign in with Ethereum](https://login.xyz/) ([EIP-4361]([EIPs/eip-4361.md at master · ethereum/EIPs · GitHub](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-4361.md))). If you were to write a signature based transaction relay like the one shown above, make absolutely sure to
+
+- ignore malleability by using standard libraries to recover signatures
+
+- keep track of hashes of messages that have already been used
+
+- don't make the signature itself part of that hash
+
+- use non-sequential, unpredictable nonces
+
+- add chain id and (part of) the contract address to the signed message
+
+
 
 [Security Considerations &mdash; Solidity 0.8.13 documentation](https://docs.soliditylang.org/en/v0.8.13/security-considerations.html#minor-details)
 
 [defcon26/Replay Attacks on Ethereum Smart Contracts.md at master · nkbai/defcon26 · GitHub](https://github.com/nkbai/defcon26/blob/master/docs/Replay%20Attacks%20on%20Ethereum%20Smart%20Contracts.md)
 
+https://medium.com/immunefi/intro-to-cryptography-and-signatures-in-ethereum-2025b6a4a33d
+
 https://medium.com/cypher-core/replay-attack-vulnerability-in-ethereum-smart-contracts-introduced-by-transferproxy-124bf3694e25
 
+https://solidity-by-example.org/hacks/signature-replay/
+
 [What is a Replay Attack?](https://academy.bit2me.com/en/que-es-un-ataque-replay/)
+
+Signature Malleability [SWC-117 · Overview](https://swcregistry.io/docs/SWC-117) [SWC-121 · Overview](https://swcregistry.io/docs/SWC-121) [SWC-122 · Overview](https://swcregistry.io/docs/SWC-122)
+
+
 
 ### Running out of gas
 
@@ -653,7 +778,7 @@ https://medium.com/northwest-nfts/how-to-safely-push-payments-in-smart-contracts
 
 [Recommendations for Smart Contract Security in Solidity - Ethereum Smart Contract Best Practices](https://ethereum-contract-security-techniques-and-tips.readthedocs.io/en/latest/recommendations/#be-aware-of-the-tradeoffs-between-send-transfer-and-callvalue)
 
-### Disclosing signatures / secure commit schemes
+### Disclosing signatures / secure commit reveal schemes
 
 [Recommendations for Smart Contract Security in Solidity - Ethereum Smart Contract Best Practices](https://ethereum-contract-security-techniques-and-tips.readthedocs.io/en/latest/recommendations/#remember-that-on-chain-data-is-public)
 
@@ -661,7 +786,7 @@ https://medium.com/northwest-nfts/how-to-safely-push-payments-in-smart-contracts
 
 https://blog.positive.com/predicting-random-numbers-in-ethereum-smart-contracts-e5358c6b8620
 
-
+[SWC-136 · Overview](https://swcregistry.io/docs/SWC-136#odd_even_fixedsol)
 
 ### Reacting on unwanted asset deposits
 
@@ -694,6 +819,15 @@ https://dasp.co/#item-4
 [Solidity Security: Comprehensive list of known attack vectors and common anti-patterns](https://blog.sigmaprime.io/solidity-security.html#contract-reference)
 
 [Solidity Security: Comprehensive list of known attack vectors and common anti-patterns](https://blog.sigmaprime.io/solidity-security.html#unchecked-calls)
+
+https://twitter.com/noxx3xxon/status/1525977094668308480?s=20&t=dDP7a7m7UNwp8Z9MwRNwaw
+
+The low-level functions call, delegatecall and staticcall return true as
+ their first return value if the called account is non-existent, as part
+ of the design of EVM. Existence must be checked prior to calling if 
+desired [Expressions and Control Structures &mdash; Solidity 0.5.8 documentation](https://solidity.readthedocs.io/en/v0.5.8/control-structures.html#error-handling-assert-require-revert-and-exceptions)
+
+
 
 ### Have a fallback withdrawal to avoid locking tokens
 
@@ -765,6 +899,10 @@ https://wiki.rugdoc.io/docs/how-to-revoke-permissions/
 
 https://dasp.co/#item-5
 
+[SWC-128 · Overview](https://swcregistry.io/docs/SWC-128)
+
+[GitHub - sigp/solidity-security-blog: Comprehensive list of known attack vectors and common anti-patterns](https://github.com/sigp/solidity-security-blog#the-vulnerability-10)
+
 [Solidity Security: Comprehensive list of known attack vectors and common anti-patterns](https://blog.sigmaprime.io/solidity-security.html#dos)
 
 [Denial of Service - Ethereum Smart Contract Best Practices](https://consensys.github.io/smart-contract-best-practices/attacks/denial-of-service/)
@@ -795,6 +933,10 @@ https://dasp.co/#item-5
 
 [Best Practices for Smart Contract Development | Yos Riady · Software Craftsman](https://yos.io/2019/11/10/smart-contract-development-best-practices/#set-up-continuous-integration)
 
+[simple-security-toolkit/development-process.md at main · nascentxyz/simple-security-toolkit · GitHub](https://github.com/nascentxyz/simple-security-toolkit/blob/main/development-process.md)
+
+
+
 ### JS based tests
 
 [simple-security-toolkit/development-process.md at main · nascentxyz/simple-security-toolkit · GitHub](https://github.com/nascentxyz/simple-security-toolkit/blob/main/development-process.md)
@@ -822,6 +964,10 @@ https://twitter.com/CertiKCommunity/status/1461500552467169284
 [building-secure-contracts/program-analysis/slither at master · crytic/building-secure-contracts · GitHub](https://github.com/crytic/building-secure-contracts/tree/master/program-analysis/slither)
 
 [building-secure-contracts/program-analysis/manticore at master · crytic/building-secure-contracts · GitHub](https://github.com/crytic/building-secure-contracts/tree/master/program-analysis/manticore)
+
+Other tools: [KnowledgeLists/EthereumSmartContracts.md at master · guylando/KnowledgeLists · GitHub](https://github.com/guylando/KnowledgeLists/blob/master/EthereumSmartContracts.md) 114
+
+
 
 ### Fuzz testing
 
@@ -917,7 +1063,7 @@ Slither printer:
   
   [Safe Haven - Ethereum Smart Contract Best Practices](https://consensys.github.io/smart-contract-best-practices/development-recommendations/precautions/safe-haven/)
 
-### ### Preparing for due diligence processes
+### Preparing for due diligence processes
 
   [Public Smart Contract Audits and Security Reviews | ConsenSys Diligence](https://consensys.net/diligence/audits/)
 
@@ -933,11 +1079,25 @@ Slither printer:
 
 [ERC20 API: An Attack Vector on Approve/TransferFrom Methods - Google Docs](https://docs.google.com/document/d/1YLPtQxZu1UAvO9cZ1O2RPXBbT0mooh4DYKjA_jp-RLM/edit)
 
+https://twitter.com/0xfoobar/status/1532767295927361536?s=20&t=dDP7a7m7UNwp8Z9MwRNwaw
+
+be careful when using SafeERC20 with non compliant token which has a 
+non-reverting fallback function because SafeERC20 functions such as 
+safeTransferFrom will give no indication that transferFrom is not 
+implemented in the token and the fallback function will be called 
+instead silently, see: [OpenZeppelin/openzeppelin-contracts#1769](https://github.com/OpenZeppelin/openzeppelin-contracts/issues/1769)
+
+
+
 ### Price Manipulation and Flashloan attacks
 
 https://github.com/Crypto-Virus/cream-finance-exploit-example
 
 https://twitter.com/0x5749/status/1476813266462539779
+
+https://twitter.com/FortaNetwork/status/1538157731349151746
+
+
 
 ### Avoid trusting onchain oracles
 
@@ -946,6 +1106,10 @@ https://twitter.com/0x5749/status/1476813266462539779
 - [Oracle Manipulation - Ethereum Smart Contract Best Practices](https://consensys.github.io/smart-contract-best-practices/attacks/oracle-manipulation/)
 
 [Chapter 11: Oracles - Why Oracles Are Needed - 《Mastering Ethereum》 - 书栈网 · BookStack](https://www.bookstack.cn/read/ethereumbook-en/spilt.1.b0fc44d2ef51cf12.md)
+
+https://twitter.com/shivsakhuja/status/1533205022372089856?s=20&t=dDP7a7m7UNwp8Z9MwRNwaw
+
+
 
 ### Integration samples for external protocols
 
@@ -976,6 +1140,17 @@ https://www.cryptovantage.com/news/why-are-cross-chain-cryptocurrency-bridges-so
 [Optimistic Rollups and Ethereum&#x27;s Layer-2 Solutions: Examining Arbitrum&#x27;s Security Mechanism | HackerNoon](https://hackernoon.com/optimistic-rollups-and-ethereums-layer-2-solutions-examining-arbitrums-security-mechanism-to3v35hr)
 
 https://ethereum.org/en/developers/docs/bridges/#risk-with-bridges
+
+https://twitter.com/kelvinfichter/status/1534636743223386119?s=20&t=dDP7a7m7UNwp8Z9MwRNwaw
+
+https://medium.com/mycrypto/the-magic-of-digital-signatures-on-ethereum-98fe184dc9c7
+
+Since [EIP-155](https://eips.ethereum.org/EIPS/eip-155), we also use the chain ID to calculate the `v` value. This prevents replay attacks across different chains: 
+Atransaction signed for Ethereum cannot be used for Ethereum Classic, 
+and vice versa. Currently, this is only used for signing transaction 
+however, and is not used for signing messages.
+
+
 
 ### Example hacks
 
@@ -1082,3 +1257,7 @@ https://dasp.co/#item-7
 https://medium.com/@VitalikButerin/i-feel-like-this-post-is-addressing-an-argument-that-isnt-the-actual-argument-that-mev-auction-b3c5e8fc1021
 
 [MEV Auction: Auctioning transaction ordering rights as a solution to Miner Extractable Value - Economics - Ethereum Research](https://ethresear.ch/t/mev-auction-auctioning-transaction-ordering-rights-as-a-solution-to-miner-extractable-value/6788)
+
+https://twitter.com/hasufl/status/1534211355686879232?s=20&t=dDP7a7m7UNwp8Z9MwRNwaw
+
+

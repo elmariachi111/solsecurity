@@ -827,9 +827,54 @@ contract IDontWantYourMoney {
 
 A `Bequeather` with an instance of `IDontWantYourMoney` as their `heir` will "send" their money when they are selfdestructed and there's no way, `heir` could reject that gratuity. 
 
+If your contract is supposed to receive plain money, Solidity historically offers two options, one of them being the default `fallback` function that's recommended to be replaced by the more concise `receive` function nowadays. The reason for having a dedicated receive function is rooted in interface confusion mistakes. A transaction that's pointed to a non-existent function on a smart contract gets routed to a defined fallback. Since each function internally is described as a hash over their ABI call signature, users could accidentally call the fallback function when operating on a deprecated or faulty ABI description.
 
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
 
+contract SignedDepositor {
+  struct Deposit {
+    uint256 amount;
+    int256 purpose;
+  }
 
+  event GrantReceived(uint256 amount);
+  event Deposited(address depositor, uint256 amount, int256 purpose);
+
+  mapping(address => Deposit[]) public _deposits;
+
+  fallback() external payable {
+    emit GrantReceived(msg.value);
+  }
+
+  function deposit(int256 purpose) external payable {
+    _deposits[msg.sender].push(
+      Deposit({ amount: msg.value, purpose: purpose })
+    );
+    emit Deposited(msg.sender, msg.value, purpose);
+  }
+}
+```
+
+Notice the `int96` type of the `purpose` argument. If someone were to confuse it when calling the `deposit` function, the funds sent along would be deposited into the contract without `deposit` ever having been called. Users may run into this issue when they rely on ABI descriptions provided by outdated SDKs, e.g. like this one, assumeably from a previous version of the contract:
+
+```json
+{
+      "inputs": [
+        {
+          //this is wrong:
+          "internalType": "uint256",
+          "type": "uint256",
+          "name": "purpose"
+        }
+      ],
+      "name": "deposit",
+      "outputs": [],
+      "stateMutability": "payable",
+      "type": "function"
+    }
+```
 
 [not-so-smart-contracts/incorrect_interface at master · crytic/not-so-smart-contracts · GitHub](https://github.com/crytic/not-so-smart-contracts/tree/master/incorrect_interface)
 

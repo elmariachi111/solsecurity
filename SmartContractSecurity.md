@@ -690,7 +690,7 @@ Any signature that has been presented to the aforementioned contract can be used
 
 But that's not all. Even if you keep track of signatures that are presented on your contract, they still can be executed on another instance of it. Adding (and verifying) the contract's address to signatures is therefore mandatory. you can use `address(this)` for that purpose when rebuilding the message signature inside the verification code. Lastly, in a multichain environment contracts are likely deployed at the same address on different chains, as made possible by the [CREATE2 opcode]([Expressions and Control Structures &mdash; Solidity 0.8.15 documentation](https://docs.soliditylang.org/en/v0.8.15/control-structures.html#salted-contract-creations-create2)). To avoid replays between the same contracts on different chains, also make sure to include the target chain's id in the signed message.
 
-The best advice for writing replay attack proof contracts, is to rely on battle tested signature primitives, like OpenZeppelin's [ECDSA]([Utilities - OpenZeppelin Docs](https://docs.openzeppelin.com/contracts/4.x/api/utils#ECDSA)) base library and make use of typed signature schemes like [EIP-712]([Utilities - OpenZeppelin Docs](https://docs.openzeppelin.com/contracts/4.x/api/utils#EIP712)) or [EIP-191]([EIPs/eip-191.md at master · ethereum/EIPs · GitHub](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-191.md)) that are also supported by popular wallets. Another example of a recently emerging application that adds a lot of domain data into its signature can be found in [Sign in with Ethereum](https://login.xyz/) ([EIP-4361]([EIPs/eip-4361.md at master · ethereum/EIPs · GitHub](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-4361.md))). If you were to write a signature based transaction relay like the one shown above, make absolutely sure to
+The best advice for writing replay attack proof contracts, is to rely on battle tested signature primitives, like OpenZeppelin's [ECDSA]([Utilities - OpenZeppelin Docs](https://docs.openzeppelin.com/contracts/4.x/api/utils#ECDSA)) base library and make use of typed signature schemes like [EIP-712]([Utilities - OpenZeppelin Docs](https://docs.openzeppelin.com/contracts/4.x/api/utils#EIP712)) or [EIP-191]([EIPs/eip-191.md at master · ethereum/EIPs · GitHub](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-191.md)) that are also supported by popular wallets. Another example of a recently emerging application that adds a lot of domain data into its signature can be found in [Sign in with Ethereum](https://login.xyz/) ([EIP-4361]([EIPs/eip-4361.md at master · ethereum/EIPs · GitHub](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-4361.md))). If you were to write a signature based transaction relay like the one shown above, make absolutely sure to 
 
 - ignore malleability by using standard libraries to recover signatures
 
@@ -717,6 +717,71 @@ https://solidity-by-example.org/hacks/signature-replay/
 Signature Malleability [SWC-117 · Overview](https://swcregistry.io/docs/SWC-117) [SWC-121 · Overview](https://swcregistry.io/docs/SWC-121) [SWC-122 · Overview](https://swcregistry.io/docs/SWC-122)
 
 ### Running out of gas
+
+Contracts  can only run a limited amount of computing instructions to avoid the global state machine being halted by complex computations. Exceeding the instruction budget mostly is due to iterations on arrays of dynamic length. A good example [observed in the wild](https://etherscan.io/tx/0x03aa5e3e4d92c4a80a64c7050032593b4e2e3bc8530dca77446b0149a183301b) are NFT brightlists being populated by administrative accounts shortly before minting starts. Developers should test those transactions with the anticipated amount of entries before executing the transaction on a live network. What's remarkable: even if a transaction runs out of gas, its fees will be consumed although the execution fails! Developers must ensure that iterations are restricted by upper bounds and fail early to avoid overpaying in case their transactions fail. If the amount of work is simply not predictable, e.g.  to support updates or migrations, add a batching function that runs the job in several smaller chunks. 
+
+The `WhalesWithBenefits`  sample contract allows members to sign up by bringing along some funds, each member that locks more than 1 ether being considered a *whale*. The contract owners want to make sure that not more than 5 whales join the community (e.g. to keep their voting power low) and check the amount of whales upon each call to the `signup` function:
+
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+contract WhalesWithBenefits {
+  struct Member {
+    bytes32 passport;
+    uint256 funds;
+  }
+
+  mapping(address => Member) public memberMap;
+  address[] public members;
+
+  function memberCount() public view returns (uint256) {
+    return members.length;
+  }
+
+  function allWhaleMembers() public view returns (address[] memory) {
+    uint256 len = members.length;
+    address[] memory _whales = new address[](5);
+    uint256 whaleIdx = 0;
+    for (uint256 i = 0; i < len; i++) {
+      Member memory mem = memberMap[members[i]];
+      if (mem.funds > 1 ether) {
+        _whales[whaleIdx++] = members[i];
+      }
+      if (whaleIdx == 5) return _whales;
+    }
+    address[] memory onlyWhales = new address[](whaleIdx);
+    if (whaleIdx > 0) {
+      for (uint256 i = 0; i < whaleIdx; i++) {
+        onlyWhales[i] = _whales[i];
+      }
+    }
+    return onlyWhales;
+  }
+
+  function signup(address newMember, uint256 funds) external {
+    address[] memory membersWithMoreThanOneEth = allWhaleMembers();
+
+    require(
+      membersWithMoreThanOneEth.length <= 5,
+      "we already have 5 whales aboard"
+    );
+    memberMap[newMember] = Member({
+      passport: keccak256(abi.encodePacked(newMember)),
+      funds: funds
+    });
+
+    members.push(newMember);
+  }
+}
+
+```
+
+The computing resources consumed by `allWhaleMembers` roughly grow linearly with the amount of members that already signed up and after 15 `signup` calls it's already exceeding 200,000 gas per call which will render new signups not only expensive but impossible on the long run. To work around this effect, one can track computed conditions when transactions happen, e.g. by storing a whale counter that's adjusted when members withdraw or deposit funds. If the condition depends on state that's out of the contract's own scope (e.g. when querying  a member's  `balanceOf` of another ERC20 contract) this might even be impossible to solve. To prove certain membership conditions, as suggested by the aforementioned brightlist case, merkle tree roots can be stored on chain and users can prove their status by sending along a merkle proof that's computed offchain and consists of negligible amount of CALLDATA array items. 
+
+
+
+
 
 [Security Considerations &mdash; Solidity 0.8.13 documentation](https://docs.soliditylang.org/en/v0.8.13/security-considerations.html#gas-limit-and-loops)
 

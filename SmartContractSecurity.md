@@ -781,13 +781,55 @@ The computing resources consumed by `allWhaleMembers` roughly grow linearly with
 
 
 
-
-
 [Security Considerations &mdash; Solidity 0.8.13 documentation](https://docs.soliditylang.org/en/v0.8.13/security-considerations.html#gas-limit-and-loops)
 
 https://medium.com/coinmonks/8-security-vulnerabilities-in-ethereum-smart-contracts-that-can-now-be-easily-avoided-dcb7de37a64
 
-### Unwanted calls to self-destruct / the fallback function
+### Unexpected selfdestruct effects & the fallback function
+
+If operating correctly, contracts are great for keeping funds at a safe place. To ensure that an internal payment split always executes at a  fair rate, one might come up with the idea to only accept divisible amounts of money to not leave any traces of dust (tiny amounts of ether) behind. There is no way to refuse funds sent to a contract, though. Even if the builtin `receive` or default function reverts, other contracts can deposit funds using a call to their own `selfdestruct` function and setting the contract under attack as a recipient. Besides, miners or validators can set any address as the the recipient for their block rewards which completely circumvents any condition put in place by the contract author. Lastly, ether can be deposited at addresses before contracts are deployed to them; by frontrunning the contracts' construction transactions attackers can leave money at the address they will be deployed at - which is quite simple to predict when observing deterministic `CREATE2` instructions.
+
+```solidity
+//SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Bequeather {
+  event Received(uint256 amount);
+
+  address payable public _heir;
+
+  constructor(address payable heir) {
+    _heir = heir;
+  }
+
+  receive() external payable {
+    emit Received(msg.value);
+  }
+
+  function farewell() public {
+    selfdestruct(_heir);
+  }
+}
+
+
+//SPDX-License-Identifier: MIT
+pragma solidity >=0.8.13;
+
+contract IDontWantYourMoney {
+  error NoMoneyAccepted();
+
+  receive() external payable {
+    revert NoMoneyAccepted();
+  }
+}
+
+```
+
+A `Bequeather` with an instance of `IDontWantYourMoney` as their `heir` will "send" their money when they are selfdestructed and there's no way, `heir` could reject that gratuity. 
+
+
+
+
 
 [not-so-smart-contracts/incorrect_interface at master · crytic/not-so-smart-contracts · GitHub](https://github.com/crytic/not-so-smart-contracts/tree/master/incorrect_interface)
 

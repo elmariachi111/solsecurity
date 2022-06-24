@@ -60,108 +60,16 @@ https://twitter.com/tayvano_/status/1516225457640787969
 
 ### Data visibility
 
-Even though they're built on crypto primitives, you can't hide anything on a blockchain. A very tempting beginner's error is to assume that `private` members of Solidity contracts could effectively hide information for others but that's not true. The `private` modifier, as in any other programming language is merely a hint to implementers how variables or functions are supposed to be used. 
-
-As an example, consider this contract that pays out all its funds to a caller who guessed its "secret" variable correctly:
-
-```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
-
-contract KeepASecret {
-  bytes32 private         _secret;
-  address payable private _owner;
-
-  constructor() {
-    _secret = keccak256(abi.encodePacked(block.timestamp));
-  }
-
-  receive() external payable {}
-
-  function guessSecret(bytes32 guess) payable external {
-    require (_secret == guess, "guess again");
-    _secret = keccak256(abi.encodePacked(block.timestamp));
-    _owner = payable(msg.sender);
-    _owner.transfer(address(this).balance);
-  }
-}
-```
-
-it contains two clear misunderstandings. First, the seemingly random `block.timestamp` can be easily retrieved by  looking at the block where the contract has been instantiated. You can use any block explorer to find the initial deployment transaction, get its block's timestamp and construct a correct guess for your `guessSecret` call. This is how its done:
+A quite common misunderstanding is to assume that `private` members of Solidity contracts could effectively hide information for others but that's not true: you can't hide anything on a blockchain. As in any other programming language the `private` modifier is merely a concept to define which members of your contract are accessible by other contracts. Don't feel tempted to write a guessing game with a private member variable to unlock the first prize. Due to the nature of how data is stored on a blockchain, it's immediately readable for everyone by peeking into the contract state using a `getStorageAt` RPC call. Here's how it works, given the secrect is your contract's first member variable:
 
 ```javascript
-const deployTransaction = await web3.eth.getTransaction(deployTransactionHash);
-const block = await web3.eth.getBlock(deployTransaction.blockNumber);
-const guess = web3.utils.keccak256(web3.utils.encodePacked(block.timestamp));
-```
-
-For consecutive calls that rely on the secret created by the previous call you instead would look for a previous call to `guessSecret` , get their block meta data including the timestamp and are able to reconstruct a valid guess, again. 
-
-Actually there's a much more trivial way to retrieve the currently stored "secret" value. As stated, the `private` modifier only means that there's no way of calling code that would yield the variable's value but you can simply peek into the contract state by using a `getStorageAt` RPC call. 
-
-Assuming that you don't have the contract's ABI at hand, you only need to observe a previous call on the chain to learn about the guess method's call signature. By knowing (or constructing) the call signature, you can invoke the method with a valid guess like this:
-
-```javascript
-const contractAddress = "0x215371DD03B11dEfb94391078F8Ab03b3BD28816";
-const contract = await KeepASecret.at(contractAddress);
+const contract = await KeepASecret.at("0x215371DD03B11dEfb94391078F8Ab03b3BD28816");
 const slot0 = await web3.eth.getStorageAt(contract.address, 0);
-//-> yields value of storage slot 0 where the "secret" is stored
-
-//the first 8 bytes of its interface hash are representing a method's binary call signature:
-const guessSignature = web3.utils.keccak256("guessSecret(bytes32)").substr(0,10);
-const tx = {
-  from: sender,
-  to: contractAddress,
-  data: guessSignature + slot0,
-}
-await web3.eth.sendTransaction(tx);
 ```
-
-### 
 
 ### Number Overflows
 
-A wide range of vulnerabilities of smart contracts derive from arithmetic overflows, a problem that needed particular attention in the past. Overflows occur when operating on variables that are determined to predefined range, similar to a mileage meter that returns to "000000" when going past "999999" miles. Developers who are used to working in high level languages like Javascript might be so used to operating on signed arithmetic that they often miss this kind of logic errors:
-
-```solidity
-pragma solidity <0.8.0;
-
-contract NumberOverflows {
-  mapping(address => uint256) public balances;
-
-  receive() external payable {
-    balances[msg.sender] += msg.value;
-  }
-
-  function withdraw(uint256 _amount) public {
-    require(balances[msg.sender] - _amount >= 0);
-    balances[msg.sender] -= _amount;
-    payable(msg.sender).transfer(_amount);
-  }
-}
-```
-
-This contract's `withdraw` method allows any sender to withdraw as much funds as they like because the `balances` value type is an unsigned integer and wraps to `2^256-1` (an astronomically high value) when "dropping" below 0. 
-
-The good news is that Solidity >0.8 added transparent support for this error class and would revert during the execution of the requirement checks. If you're writing code that requires using a Solidity version below 0.8, you're highly recommended to use one of the publicly available SafeMath implementations for any arithmetic operation, e.g. the one by OpenZeppelin:
-
-```solidity
-pragma solidity <0.8.0;
-
-import "@openzeppelin/contracts/math/SafeMath.sol";
-
-contract NumberOverflows {
-  using SafeMath for uint256;
-  //...
-  function withdraw(uint256 _amount) public {
-    require(balances[msg.sender].sub(_amount) >= 0);
-    balances[msg.sender] = balances[msg.sender].sub(_amount);
-    payable(msg.sender).transfer(_amount);
-  }
-}
-```
-
-Arithmetic overflow conditions aren't always as obvious as in this example. Even though seems quite unlikely that multiplications on an `uint256` ever hit the roof, they can be tricked into that by users, like in this [classical]([NVD - CVE-2018-10299](https://nvd.nist.gov/vuln/detail/CVE-2018-10299#vulnCurrentDescriptionTitle)) "batchOverflow" example that could be found in several early ERC20 contracts:
+Until Solidity 0.8 arithmetic overflows were an immanent threat to observe during contract development. Overflows occur when operations are executed on variables and the result exceeds their value range as defined by their type, similar to a mileage meter that returns to "000000" when going past "999999" miles. Solidity >0.8 added transparent support for this class of error and reverts if a variable wraps during execution. For code bases that require a Solidity version lower than 0.8, it's highly recommended to use a public SafeMath implementation e.g. the one by OpenZeppelin. Arithmetic overflows aren't always obvious. This [classical]([NVD - CVE-2018-10299](https://nvd.nist.gov/vuln/detail/CVE-2018-10299#vulnCurrentDescriptionTitle)) "batchOverflow" example could be found in several early ERC20 contracts:
 
 ```solidity
   function batchTransfer(address[] memory receivers, uint256 value) public {
@@ -169,7 +77,6 @@ Arithmetic overflow conditions aren't always as obvious as in this example. Even
     //instead: uint256 amount = value.mul(receivers.length);
 
     require(balances[msg.sender] >= amount);
-
     balances[msg.sender] = balances[msg.sender].sub(amount);
     for (uint256 i = 0; i < receivers.length; i++) {
       balances[receivers[i]] = balances[receivers[i]].add(value);
@@ -177,92 +84,15 @@ Arithmetic overflow conditions aren't always as obvious as in this example. Even
   }
 ```
 
-Since an attacker is in full control over `batchTransfer`'s inputs, anyone can choose $2^{255}$ for `value` and provide 2 accounts. The multiplication overflow leads to `amount` being zero which passes the requirement (the attacker's `balance`  is 0). After the call `receivers` will end up with nearly unlimited balances and can withdraw as much funds from the contract as they like. Here's the attack's code:
-
-```javascript
-const instance = await NumberOverflows.deployed();
-const uint255 = (new web3.utils.BN(2)).pow(new web3.utils.BN(255));
-
-await instance.batchTransfer([accounts[2], accounts[3]], uint255, {
-  from: accounts[8]
-});
-
-const attackerBalance = await instance.balances(accounts[2]);
-expect(attackerBalance.toString()).to.equal("57896044618658097711785492504343953926634992332820282019728792003956564819968");
-await instance.withdraw(web3.utils.toWei("2", "ether"), { from: accounts[2] });
-```
-
-A far more advanced example of a hard to detect underflow issue can be found in the [PoWHCoin attack from 2018](https://medium.com/@ebanisadr/how-800k-evaporated-from-the-powh-coin-ponzi-scheme-overnight-1b025c33b530).
-
-[Solidity Security: Comprehensive list of known attack vectors and common anti-patterns](https://blog.sigmaprime.io/solidity-security.html#precision)
-
-TM integer division  [Solidity Best Practices for Smart Contract Security | ConsenSys](https://consensys.net/blog/developers/solidity-best-practices-for-smart-contract-security/) [GitHub - sigp/solidity-security-blog: Comprehensive list of known attack vectors and common anti-patterns](https://github.com/sigp/solidity-security-blog#15-floating-points-and-precision)
+Since an attacker is in full control over `batchTransfer`'s inputs, anyone can choose `value` as 2^255 and provide 2 account receivers. This leads to `amount` overflow to zero which passes the requirement (the attacker's `balance` is 0). After the execution `receivers` will end up with nearly unlimited funds.
 
 ### Constraining method visibility / variable shadowing
 
-Even worse than making wrong assumptions about the effects of visibility modifiers is to simply forget using them.
+Even worse than making wrong assumptions about the effects of visibility modifiers is to simply forget using them. When deploying proxies, composeable or upgradeable contracts, it's pretty common to replace constructors with `public initializers` and first time ownership setters. When not logically constraining them after the setup phase has ended, anyone can become the contract's owner and call its administrative functions. The Solidity compiler cannot warn about that issue because it is not aware about the method's intention and so this type of mistake is often overlooked. The default visibility of Solidity contract functions is *public* and since version 0.5 it's mandatory to declare member visibility modifiers to so developers at least are made aware of the issue.
 
-```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
+A lesser notable issue is Solidity's feature to shadow contract members in derived contracts which even works with built in members like `revert` or `selfdestruct`. When deriving from contracts shadowing those members, child contracts will behave differently as expected. Since 0.5 the Solidity Compiler and solhint is warning users when they write code that shadows builtin symbols.
 
-contract MethodVisibility {
-  address private owner;
-  bool public paused = false;
-
-  modifier onlyOwner() {
-    require(msg.sender == owner);
-    _;
-  }
-
-  modifier notPaused() {
-    require(paused == false);
-    _;
-  }
-
-  function initialize() public {
-    owner = msg.sender;
-  }
-
-  function togglePause(bool _newVal) public onlyOwner {
-    paused = _newVal;
-  }
-
-  function withdraw() public onlyOwner notPaused {
-    payable(msg.sender).transfer(address(this).balance);
-  }
-}
-```
-
-Using initializers for contracts is pretty common, particularly when writing proxies, composeable or upgradeable contracts. The author of this example unfortunately forgot to constrain calls to the `initialize` method so that **anyone** could set themselves as the contract owner and withdraw funds. The Solidity compiler cannot warn about that issue because it is not aware about the method's intention and so this type of mistake is often overlooked. The default visibility of Solidity contract functions is *public* and since version 0.5 it's mandatory to add a visibility modifier to functions so developers at least are made aware of the issue.
-
-A lesser notable issue is Solidity's feature to shadow contract members in derived contracts. It's even possible to shadow implementations of built in members like `revert` or `selfdestruct`. When deriving from contracts that shadowed those members, child contracts will behave differently as expected. Since 0.5 the Solidity Compiler and solhint is warning users when they write code that shadows builtin symbols.
-
-```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
-
-contract VariableShadowing {
-  bool public alive = true;
-  uint256 public value = 0;
-
-  function selfdestruct(address payable beneficiary) internal {
-    alive = false;
-  }
-
-  function addValue(uint256 x) public {
-    value += x;
-  }
-}
-
-contract ContractDestroyer is VariableShadowing {
-  function destroy() public {
-    selfdestruct(payable(msg.sender));
-  }
-}
-```
-
- TM find an OZ sample when shadowing makes sense
+TM find an OZ sample when shadowing makes sense
 
 [not-so-smart-contracts/unprotected_function at master · crytic/not-so-smart-contracts · GitHub](https://github.com/crytic/not-so-smart-contracts/tree/master/unprotected_function)
 
@@ -278,133 +108,46 @@ https://dasp.co/#item-2
 
 > execution order: ?
 > 
-> In Solidity, the order of evaluation of sub-expressions is *unspecified*. This
+> In Solidity, the order of evaluation of sub-expressions is _unspecified_. This
 > means that in `f(g(), h())`, `g()` might get evaluated before `h()` or `h()` might get evaluated before `g()`. Practically, this order is predictable, but
-> Solidity code shouldn’t depend on that behavior between compiler versions. In *most* circumstances `g()` is evaluated before `h()` (left-to-right order),
+> Solidity code shouldn’t depend on that behavior between compiler versions. In _most_ circumstances `g()` is evaluated before `h()` (left-to-right order),
 > which is also the behavior that most languages specify in their
 > standards. However, in the case of emitting an event with indexed arguments, the
 > arguments are evaluated right-to-left.
 
-### Locking pragmas
-
 ### Error handling
 
-Solidity comes with a choice of error handling paradigms that compare to concepts of other languages. Most contracts make use of `require` statements with string reasons like this one:
+Solidity comes with a selection of error handling paradigms that are comparable to concepts of other languages. Most contracts make use of `require` statements with string reasons but since version 0.8.4 Solidity gained support for custom error types that become part of the contract's ABI. They can carry parameters and can be documented using NatSpec. Clients that are provided custom error types get a better idea on what went wrong and translate the error to something meaningful inside the current user's context. They also save on gas during deployment because the verbose error strings haven't to be written on chain.
 
 ```solidity
-require(n % 2 == 0, "must provide an even number or this fails")
-```
-
-Solidity 0.8.4 introduced support for custom error types that not only allows you to save on gas during deployment (the error strings have to be written on chain) but also become part of the contract ABI, they can carry parameters and can be documented using NatSpec. Also clients that support custom error types get a better idea on what went wrong and translate the error to something meaningful inside the current user context. 
-
-```solidity
-contract SomeContract {
+contract EvenAdder {
   /**
-   * @dev mainly used for illustration purposes
    * @param givenNumber the number that was supposed to be even but wasn't
    */
   error NotAnEvenNumber(uint256 givenNumber);
-
   function addEvenNumber(uint256 evenNumber) public returns (uint256) {
     if (evenNumber % 2 != 0) {
       revert NotAnEvenNumber(evenNumber);
     }
-    //do anything
     return value;
   }
 }
 ```
 
-A pitfall that's highly recommended to be avoided arises from using low level `call`s to other contracts or using `address.send` instead of `address.transfer`.  Errors thrown during low level calls don't even bubble up to the calling context and must be checked by their boolean return value. Here's an example:
+Errors that are thrown during low level `call`s don't bubble up to the calling context but instead result in false return values. If the callee's interface is known to the client, one should always prefer to use its code over low level calls which propagate errors to the calling context.
 
 ```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
-
-contract EvenAdder {
-  error NotAnEvenNumber(uint256 givenNumber);
-
-  uint256 public value;
-
-  constructor(uint256 initialValue) {
-    value = initialValue;
-  }
-
-  function addEvenNumber(uint256 evenNumber) public returns (uint256) {
-    if (evenNumber % 2 != 0) {
-      revert NotAnEvenNumber(evenNumber);
-    }
-
-    value += evenNumber;
-    return value;
-  }
-}
-
-contract AdderClient {
-  function addWithContractInterface(EvenAdder adder, uint256 value) public {
-    adder.addEvenNumber(value);
-  }
-
-  function addWithLowLevelCall(address adder, uint256 value) public {
-    bytes memory payload = abi.encodeWithSignature(
-      "addEvenNumber(uint256)",
-      value
-    );
-    (bool success, bytes memory returnData) = adder.call(payload);
-    require(sucess, "something went wrong"); // <-- this is mandatory!
-  }
+function addWithLowLevelCall(EvenAdder adder) public {
+  adder.addEvenNumber(3); //will throw an error
+  //will not revert but return false:
+  bytes memory payload = abi.encodeWithSignature("addEvenNumber(uint256)", 3);
+  (bool success, bytes memory returnData) = address(adder).call(payload);
 }
 ```
 
-The `addWithContractInterface` function makes use of a concrete contract interface that's known at compile time. Errors caused by reversions of `addEvenNumber` propagate to the calling context and revert the transactions. In contrast, `addWithLowLevelCall` calls the contract by manually assembling a call payload manually using the method's interface signature at runtime. When`addEvenNumber(uint256)` fails, execution of the calling contract will continue unless it explicitly requires the low level call's return value to be `true`.
+A related pitfall occurs when using  `address.send` or `address.call` as means to transfer funds between accounts. It's therefore highly adivsable to rely on `address.transfer` for money transfers which reverts if something goes wrong on the receiver's side.
 
-When delegating control to other contracts, e.g. to transfer funds between accounts, things get even more hairy. To transfer Ethers, developers have three options: `address.send`, `address.transfer`, `address.call` as illustrated in this example:
 
-```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
-
-contract MoneyDispatcher {
-  mapping(address => uint256) public deposits;
-
-  function deposit() external payable {
-    deposits[msg.sender] += msg.value;
-  }
-
-  //doesn't revert
-  function transferFundsWithSend(address payable to, uint256 amount) public {
-    bool success = to.send(amount);
-    deposits[msg.sender] -= amount;
-  }
-
-  //doesn't revert
-  function transferFundsWithCall(address payable to, uint256 amount) public {
-    (bool success, bytes memory returnData) = to.call{ value: amount }("");
-    deposits[msg.sender] -= amount;
-  }
-
-  //reverts
-  function transferFundsWithTransfer(address payable to, uint256 amount)
-    public
-  {
-    to.transfer(amount);
-    deposits[msg.sender] -= amount;
-  }
-}
-
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
-
-contract IDontWantYourMoney {
-  error NoMoneyAccepted();
-
-  receive() external payable {
-    revert NoMoneyAccepted();
-  }
-}
-```
-
-When a sender initiates a transfer towards an instance of `IDontWantYourMoney`, only `transferFundsWithTransfer` reverts the transaction. Since the `success` return values remain unchecked, all following statements are executed.
 
 TM link to ERC20 vulnerabilities / check return values
 
@@ -424,9 +167,7 @@ https://medium.com/coinmonks/8-security-vulnerabilities-in-ethereum-smart-contra
 
 ### Blockheight, time and randomness
 
-Suprisingly, time is a rather blurry concept on blockchains. All transactions within one block use and carry that block's timestamp which is defined by its miner or validator. The Ethereum protocol restricts the upper bound of a block's timestamp to [15 seconds in the future]([go-ethereum/consensus.go at master · ethereum/go-ethereum · GitHub](https://github.com/ethereum/go-ethereum/blob/master/consensus/ethash/consensus.go#L275)) but practically miners and validators will only build upon blocks that have a reasonably correct time on them. Ethereum's peering protocol even requires miners to sync their machine's time with a correct time source.
-
-Since the precise time at which transactions are executed is unpredictable and unreliable, smart contracts should take great care when relying on `block.timestamp`. Consider this raffle that starts at a given point in time and selects a winner when it's executed at a seemingly random timestamp that can be divided by 43:
+Time is a rather blurry concept on blockchains. All transactions within one block use and carry that block's timestamp which is determined by its miner or validator. The Ethereum protocol restricts the upper bound of a block's timestamp to [15 seconds in the future]([go-ethereum/consensus.go at master · ethereum/go-ethereum · GitHub](https://github.com/ethereum/go-ethereum/blob/master/consensus/ethash/consensus.go#L275)) and its peering protocol requires miners to sync their machine's time so practically block timestamps will be reasonably correct but never precise to the second. Hence smart contracts should take great care when relying on `block.timestamp`. A common mistake is to rely on timestamps (or any other miner controlled value) as sources for randomness for raffles:
 
 ```solidity
 //SPDX-License-Identifier: MIT
@@ -453,13 +194,11 @@ contract HighNoon {
 }
 ```
 
-While usual blockchain users have to trust to luck, block producers can create blocks by selecting a timestamp that's greater than `gameStartsAt` and divisible by 43 for a new block. In the same block they call `draw` themselves and finally publish it slightly ahead of time. The least trustful atom of granular time on an EVM blockchain therefore roughly translates to the blocktime the chain needs to proceed (~14 seconds on mainnet). 
+Block producers can create blocks by selecting a timestamp that's greater than `gameStartsAt` and divisible by 43 for a new block. In the same block they call `draw` themselves and finally publish it slightly ahead of time. The least trustful atom time on an EVM blockchain can considered to be the blocktime the chain needs to proceed (~14 seconds on mainnet).
 
-Another approach to lock funds, actions or decisions for a certain minimal amount of time is using the current chain's block height. Since all blocks build on top of each other and the average block time usually doesn't change dramatically, it might be a better measure for passed time in comparison to the use of wall clocks. However, using block heights for time locks doesn't solve the "miner gets it first" issue either, since block producers still can condition their issuance of blocks on the block height they observe.  
+Another approach of relying contract conditions to time is using the current chain's block height. Since all blocks build on top of each other and the average block time is pretty stable, it might be a better measure for passed time than the use of wall clock time. That however doesn't solve the "miner gets it first" issue, since block producers still can condition their issuance of blocks on the block height they observe. Related to that, creating forgery-proof randomness on blockchains is practically impossible without an external source of entropy because all effects of blockchains transactions are deterministic and any pseudo random condition can be constructed by parties that understand the requirements. There are various approaches that can crate reliable random values, the most battle tested ones being verifiable random functions (VRF) [as supplied by the Chainlink oracle network](https://blog.chain.link/vrf-v2-mainnet-launch/) (e.g. used by [PoolTogether](https://medium.com/pooltogether/using-chainlink-vrf-for-randomness-generation-in-pooltogether-619a4280a7ae)) and RanDAOs which require a timelocked commit reveal scheme powered by several parties (e.g. used in [Eth's consensus layer's beacon chain](https://eth2book.info/altair/part2/building_blocks/randomness)).
 
-In relation, creating forgery-proof randomness on blockchains is practically impossible without an external source of entropy because all effects of blockchains transactions  are deterministically predefined and any random condition can be constructed by parties that understand the requirements. 
 
-There are various approaches that can crate reliable random values, the most battle tested ones being verifiable random functions (VRF) [as supplied by the Chainlink oracle network](https://blog.chain.link/vrf-v2-mainnet-launch/) (e.g. used by [PoolTogether](https://medium.com/pooltogether/using-chainlink-vrf-for-randomness-generation-in-pooltogether-619a4280a7ae)) and RanDAOs which require a timelocked commit reveal scheme powered by several parties (e.g. used in [Eth's consensus layer's beacon chain](https://eth2book.info/altair/part2/building_blocks/randomness)). 
 
 https://blog.cotten.io/timing-future-events-in-ethereum-5fbbb91264e7
 
@@ -485,49 +224,36 @@ https://medium.com/ginar-io/a-review-of-random-number-generator-rng-on-blockchai
 
 ### Event emission & traceability
 
-Logging events is far more than a plain debugging feature of contracts, in fact many services and applications heavily depend on events that are emitted by smart contracts to recover contract state, analyse the state history, trigger actions on user interfaces or monitor activity. It's adviseable to trigger events from functions that modify state so side effects can be read and reacted on by callers. This is particularly useful for transactions that call other contracts during their execution:
+Logging events is far more than a plain debugging feature of contracts, in fact many services and applications heavily depend on events to track contract state, analyse the state history, trigger actions on user interfaces or monitor activity. Contracts should trigger events from functions that modify state so clients can react on their transactions' effects.
 
 ```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
-
 contract TokenIssuer {
-  uint256 internal constant ISSUANCE = 1_000_000;
   mapping(address => uint256) internal balances;
 
   event TokensIssued(
-    address indexed caller,
-    address indexed to,
-    uint256 amount,
-    uint256 balance
+    address indexed caller, address indexed to, uint256 amount, uint256 balance
   );
 
   function issueTokens(address to) public returns (uint256) {
-    balances[to] += ISSUANCE;
-
-    emit TokensIssued(msg.sender, to, ISSUANCE, balances[to]);
+    balances[to] += 1_000_000;
+    emit TokensIssued(msg.sender, to, 1_000_000, balances[to]);
     return balances[to];
   }
 }
 
 contract TokenGranter {
   TokenIssuer private _issuer;
-
-  constructor(TokenIssuer issuer) {
-    _issuer = issuer;
-  }
-
   function grantTokens() external returns (uint256) {
     return _issuer.issueTokens(msg.sender);
   }
 }
 ```
 
-`TokenGranter` grants users new tokens by delegating a call to a trusted `TokenIssuer`. Even though `grantTokens` is supposed to  return the current user's token balance, client code cannot access this return value since it will only be determined after block finality has been reached, hence state modifying contract interactions only yield a transaction receipt to their callers. Emitting `TokenIssued` events on the issuer's side lets clients quickly verify the effects of their transactions.
+`TokenGranter` grants users new tokens by delegating a call to a trusted `TokenIssuer`. Even though `grantTokens` is supposed to return the current user's token balance, client code cannot access this return value since it will only be determined after block finality has been reached, hence state modifying contract interactions only yield a transaction receipt to their callers. Emitting `TokenIssued` events on the issuer's side lets clients quickly verify the effects of their transactions.
 
-Events can be used to cheaply store state traces that would be highly expensive to store on chain instead (8 gas per byte vs 625 gas). Instead of keeping iterable inverse mappings, e.g. to find all NFTs owned by an user on a contract, indexers simply can replay all transactions and watch for `Transfer` events to build a mapping that can be queried independently from the blockchain. 
+Events can be used to cheaply store state traces that would be highly expensive to store on chain instead (8 gas per byte vs 625 gas). Instead of keeping iterable inverse mappings, e.g. to find all NFTs owned by an user on a contract, indexers simply can replay all transactions and watch for `Transfer` events to build a mapping that can be queried independently from the blockchain.
 
-Lastly, using events allows monitoring tools to track what's happening on a contract, send alerts and even trigger maintenance events (e.g. pausing withdrawals) in case they find suspicious interactions.
+Lastly, using events allows monitoring tools to track what's going on on a contract, send alerts and even trigger maintenance events (e.g. pausing withdrawals) in case they find suspicious interactions.
 
 [A Guide to Events and Logs in Ethereum Smart Contracts | ConsenSys](https://consensys.net/blog/developers/guide-to-events-and-logs-in-ethereum-smart-contracts/)
 
@@ -539,24 +265,13 @@ Lastly, using events allows monitoring tools to track what's happening on a cont
 
 ### Who is msg.sender & tx.origin
 
-Considered an artefact of Ethereum's early days Solidity's `tx.origin` global variable seems to be a very convenient tool to find out about the transaction's original sender by traversing the call stack up to  its initial entrypoint. That's very helpful to find out whether the execution has been triggered by an external account (`require(tx.origin == msg.sender)`) but can become dangerous when being used for authenticating the caller.  `tx.origin` vulnerabilities rely on phishing attacks on privileged users that are tricked into interacting with another contract that calls the attackable contract on their behalf:
+At first glance Solidity's global variable `tx.origin`  seems to be a convenient tool to find transaction's original sender. Historically it has been used to determine whether the execution has been triggered by an external account (`require(tx.origin == msg.sender)`) but it can become dangerous when being used for authenticating the caller. `tx.origin` vulnerabilities rely on phishing attacks on privileged users that are tricked into interacting with another contract that calls the attackable contract on their behalf:
 
 ```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
-
 contract Wallet {
   address public _owner;
-
-  constructor(address owner) {
-    _owner = owner;
-  }
-
-  receive() external payable {}
-
   function withdrawAll(address payable recipient) public {
-    //to stay safe: use msg.sender instead
-    require(tx.origin == _owner);
+    require(tx.origin == _owner); //to stay safe: use msg.sender instead
     recipient.transfer(address(this).balance);
   }
 }
@@ -564,12 +279,6 @@ contract Wallet {
 contract Phisher {
   Wallet private _attackableWallet;
   address private _attacker;
-
-  constructor(Wallet wallet, address attacker) {
-    _attackableWallet = wallet;
-    _attacker = attacker;
-  }
-
   receive() external payable {
     _attackableWallet.withdrawAll(payable(_attacker));
   }
@@ -588,119 +297,29 @@ When the owner of the `Phisher` contract successfully tricks `Wallet`'s `owner` 
 
 ### Replay attacks and reusable signatures
 
-Signatures are the core crypto mechanism that make blockchain ecosystem work by proving that a piece of information, e.g. a transaction, originates from some account. When used as unlocking proofs for smart contract functions there are quite a lot caveats to keep in mind. A pretty common application of signatures are gasless transactions, payment channels or relays that allow anyone to execute a transaction on behalf of its original sender. One could also think of them as offchain cheques that can be redeemed in the future. A simple approach to use them could look like this:
+Signatures are the core crypto primitive to prove that a piece of information originates from an account. They enable gasless transactions, payment channels or relays that execute transactions on behalf of the signer. You could also think of them as offchain "cheques" that can be redeemed by presenting them to a contract. When used that way, contracts must keep track of which signatures they already have acknowledged, otherwise attackers can simply replay transactions with signatures they found on the ledger. The [malleable nature of ECDSA curve based signatures](https://coders-errand.com/malleability-ecdsa-signatures/) allows to derive another valid signature from a given valid signature so one mustn't use the signature itself for tracking already presented signatures. Note, that  the Ethereum protocol addresses this issue in [EIP-2]([EIP-2: Homestead Hard-fork Changes](https://eips.ethereum.org/EIPS/eip-2)) and allows transaction signatures from one side of the curve, but the core `ecrecover` function recovers custom signatures from both.
+
+Even if you keep track of historic signatures, they are valid when checked by [another contract instance](https://medium.com/cypher-core/replay-attack-vulnerability-in-ethereum-smart-contracts-introduced-by-transferproxy-124bf3694e25). Thus, the current contract's address should be part of the signed message. Lastly, in a multichain environment contracts can be deployed at the same address on different chains by using the [CREATE2 opcode]([Expressions and Control Structures — Solidity 0.8.15 documentation](https://docs.soliditylang.org/en/v0.8.15/control-structures.html#salted-contract-creations-create2)). To avoid signature replays of  the same contracts on different chains, also make sure to include the target chain's id in the signed message. To avoid most signature related, use battle tested implementations like OpenZeppelin's [ECDSA]([Utilities - OpenZeppelin Docs](https://docs.openzeppelin.com/contracts/4.x/api/utils#ECDSA)) base library and make use of typed signature schemes like [EIP-712]([Utilities - OpenZeppelin Docs](https://docs.openzeppelin.com/contracts/4.x/api/utils#EIP712)) or [EIP-191]([EIPs/eip-191.md at master · ethereum/EIPs · GitHub](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-191.md)) that are also supported by popular wallets. 
 
 ```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
-
-//don't use!!
 contract PaymentProxy {
   mapping(address => uint256) public balances;
+  mapping(bytes32 => bool) public alreadyUsed;
 
-  receive() external payable {
-    balances[msg.sender] += msg.value;
-  }
-
-  function payWithSignature(address from, address to, uint256 amount, bytes memory signature) public {
-    (uint8 v, bytes32 r, bytes32 s) = splitSignature(signature);
-    bytes32 message = prefixed(
-      keccak256(abi.encodePacked(from, to, amount))
-    );
-    address recovered = ecrecover(message, v, r, s);
-    require(from == address(recovered), "bad signature");
-    require(balances[from] > 0 && balances[from] - amount >= 0, "insufficient funds");
-    balances[from] -= amount;
-    balances[to] += amount;
-  }
-
-  function splitSignature(bytes memory sig) internal pure returns (uint8 v, bytes32 r, bytes32 s)
-  {
-    require(sig.length == 65);
-    assembly {    
-      r := mload(add(sig, 32))
-      s := mload(add(sig, 64))
-      v := byte(0, mload(add(sig, 96)))
-    }
-  }
-
-  function prefixed(bytes32 hash) internal pure returns (bytes32) {
-    return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+  function payWithSignature(
+    address from, address to, uint256 amount, bytes memory signature, uint256 nonce) 
+    public {
+        (uint8 v, bytes32 r, bytes32 s) = splitSignature(signature);
+        bytes32 messageHash = keccak256(abi.encodePacked(address(this), block.chainid, from, to, amount, nonce));
+        require(!alreadyUsed[messageHash], "signature already used");
+        alreadyUsed[sigid] = true;
+        address recovered = ecrecover(prefixed(messageHash), v, r, s);
+        require(from == address(recovered),"bad signature");
+        balances[from] -= amount;
+        balances[to] += amount;
   }
 }
 ```
-
-An obvious flaw of this first idea is that one signature can presented several times since the contract doesn't keep track of signature redemptions that it already has seen, like so:
-
-```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
-
-contract PaymentProxy {
-  mapping(address => uint256) public balances;
-  mapping(bytes32 => bool) public signatureUsed;
-
-  function payWithSignature(address from, address to, uint256 amount, bytes memory signature) public {
-    (uint8 v, bytes32 r, bytes32 s) = splitSignature(signature);
-    bytes32 message = prefixed(keccak256(abi.encodePacked(from, to, amount)));
-    bytes32 sigid = keccak256(abi.encodePacked(message, signature));
-    require(!signatureUsed[sigid], "signature already used");
-    //...
-    signatureUsed[sigid] = true;
-  }
-}
-```
-
-However, this approach allows attackers to redeem the cheque twice and that's because [ECDSA curve signatures are malleable](https://coders-errand.com/malleability-ecdsa-signatures/). Signatures are points on a symmetric curve and for any statement that's signed, there are two valid signatures that resolve to the same public key. The Ethereum protocol addresses this issue in [EIP-2]([EIP-2: Homestead Hard-fork Changes](https://eips.ethereum.org/EIPS/eip-2)) and allows transaction signatures to be only computed from one side of the curve, but the core `ecrecover` procedure still allows recovering any presented signature.
-
-Here's how one can forge a symmetric valid signature using one they observed on a public ledger:
-
-```javascript
-const createMalledSig = (signature) => {
-  const [r, s, v] = [
-    signature.slice(0, 66),
-    web3.utils.toBN('0x' + signature.slice(66, 130)),
-    web3.utils.hexToNumber('0x' + signature.slice(130, 132))
-  ]
-  const secp256k1n = web3.utils.toBN("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
-  const [sx, vx] = [
-    web3.utils.toHex(secp256k1n.sub(s)).substr(2),
-    web3.utils.toHex(v == 27 ? 28 : 27).substr(2)
-  ]
-  return r + sx + vx;
-}
-```
-
-resulting in two signatures that `ecrecover` resolves to the same address:
-
-```javascript
-it("signatures are malleable", async () => {
-  const msg = web3.utils.soliditySha3("some text");
-  const signature = await web3.eth.sign(msg, accounts[0]);
-  const malledSignature = createMalledSig(signature);
-  expect(
-    await web3.eth.accounts.recover(msg, signature)
-  ).to.be.equal(
-    await web3.eth.accounts.recover(msg, malledSignature)
-  );
-});
-```
-
-Any signature that has been presented to the aforementioned contract can be used again to redeem the same amount of tokens, a vulnerability classified as [SWC-117]([SWC-117 · Overview](https://swcregistry.io/docs/SWC-117)). The advice is to not keep track hashes including the signature value but rather hashes of the presented message and an appropriate `nonce` that users and contracts agree on.
-
-But that's not all. Even if you keep track of signatures that are presented on your contract, they still can be executed on another instance of it. Adding (and verifying) the contract's address to signatures is therefore mandatory. you can use `address(this)` for that purpose when rebuilding the message signature inside the verification code. Lastly, in a multichain environment contracts are likely deployed at the same address on different chains, as made possible by the [CREATE2 opcode]([Expressions and Control Structures &mdash; Solidity 0.8.15 documentation](https://docs.soliditylang.org/en/v0.8.15/control-structures.html#salted-contract-creations-create2)). To avoid replays between the same contracts on different chains, also make sure to include the target chain's id in the signed message.
-
-The best advice for writing replay attack proof contracts, is to rely on battle tested signature primitives, like OpenZeppelin's [ECDSA]([Utilities - OpenZeppelin Docs](https://docs.openzeppelin.com/contracts/4.x/api/utils#ECDSA)) base library and make use of typed signature schemes like [EIP-712]([Utilities - OpenZeppelin Docs](https://docs.openzeppelin.com/contracts/4.x/api/utils#EIP712)) or [EIP-191]([EIPs/eip-191.md at master · ethereum/EIPs · GitHub](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-191.md)) that are also supported by popular wallets. Another example of a recently emerging application that adds a lot of domain data into its signature can be found in [Sign in with Ethereum](https://login.xyz/) ([EIP-4361]([EIPs/eip-4361.md at master · ethereum/EIPs · GitHub](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-4361.md))). If you were to write a signature based transaction relay like the one shown above, make absolutely sure to 
-
-- ignore malleability by using standard libraries to recover signatures
-
-- keep track of hashes of messages that have already been used
-
-- don't make the signature itself part of that hash
-
-- use non-sequential, unpredictable nonces
-
-- add chain id and (part of) the contract address to the signed message
 
 [Security Considerations &mdash; Solidity 0.8.13 documentation](https://docs.soliditylang.org/en/v0.8.13/security-considerations.html#minor-details)
 
@@ -718,68 +337,9 @@ Signature Malleability [SWC-117 · Overview](https://swcregistry.io/docs/SWC-117
 
 ### Running out of gas
 
-Contracts  can only run a limited amount of computing instructions to avoid the global state machine being halted by complex computations. Exceeding the instruction budget mostly is due to iterations on arrays of dynamic length. A good example [observed in the wild](https://etherscan.io/tx/0x03aa5e3e4d92c4a80a64c7050032593b4e2e3bc8530dca77446b0149a183301b) are NFT brightlists being populated by administrative accounts shortly before minting starts. Developers should test those transactions with the anticipated amount of entries before executing the transaction on a live network. What's remarkable: even if a transaction runs out of gas, its fees will be consumed although the execution fails! Developers must ensure that iterations are restricted by upper bounds and fail early to avoid overpaying in case their transactions fail. If the amount of work is simply not predictable, e.g.  to support updates or migrations, add a batching function that runs the job in several smaller chunks. 
+Gas limits the amount of computing instructions that can be executed during a transaction, e.g. to avoid endless iterations on dynamically sized arrays that grow over time. Iteration conditions should hence be restricted by upper bounds and revert early when the iteration can be assumed becoming too large. It's particularly dangerous to call external contracts during iterations, e.g. querying arbitrary ERC20 contract's `balanceOf` members, since you cannot safely predict how much gas costs those calls incur. 
 
-The `WhalesWithBenefits`  sample contract allows members to sign up by bringing along some funds, each member that locks more than 1 ether being considered a *whale*. The contract owners want to make sure that not more than 5 whales join the community (e.g. to keep their voting power low) and check the amount of whales upon each call to the `signup` function:
-
-```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
-
-contract WhalesWithBenefits {
-  struct Member {
-    bytes32 passport;
-    uint256 funds;
-  }
-
-  mapping(address => Member) public memberMap;
-  address[] public members;
-
-  function memberCount() public view returns (uint256) {
-    return members.length;
-  }
-
-  function allWhaleMembers() public view returns (address[] memory) {
-    uint256 len = members.length;
-    address[] memory _whales = new address[](5);
-    uint256 whaleIdx = 0;
-    for (uint256 i = 0; i < len; i++) {
-      Member memory mem = memberMap[members[i]];
-      if (mem.funds > 1 ether) {
-        _whales[whaleIdx++] = members[i];
-      }
-      if (whaleIdx == 5) return _whales;
-    }
-    address[] memory onlyWhales = new address[](whaleIdx);
-    if (whaleIdx > 0) {
-      for (uint256 i = 0; i < whaleIdx; i++) {
-        onlyWhales[i] = _whales[i];
-      }
-    }
-    return onlyWhales;
-  }
-
-  function signup(address newMember, uint256 funds) external {
-    address[] memory membersWithMoreThanOneEth = allWhaleMembers();
-
-    require(
-      membersWithMoreThanOneEth.length <= 5,
-      "we already have 5 whales aboard"
-    );
-    memberMap[newMember] = Member({
-      passport: keccak256(abi.encodePacked(newMember)),
-      funds: funds
-    });
-
-    members.push(newMember);
-  }
-}
-
-```
-
-The computing resources consumed by `allWhaleMembers` roughly grow linearly with the amount of members that already signed up and after 15 `signup` calls it's already exceeding 200,000 gas per call which will render new signups not only expensive but impossible on the long run. To work around this effect, one can track computed conditions when transactions happen, e.g. by storing a whale counter that's adjusted when members withdraw or deposit funds. If the condition depends on state that's out of the contract's own scope (e.g. when querying  a member's  `balanceOf` of another ERC20 contract) this might even be impossible to solve. To prove certain membership conditions, as suggested by the aforementioned brightlist case, merkle tree roots can be stored on chain and users can prove their status by sending along a merkle proof that's computed offchain and consists of negligible amount of CALLDATA array items. 
-
-
+Another example are huge [NFT brightlists](https://etherscan.io/tx/0x03aa5e3e4d92c4a80a64c7050032593b4e2e3bc8530dca77446b0149a183301b) being populated shortly before minting starts. Developers should test their contracts with the anticipated amount of entries before executing the transaction on a live network since even if it runs out of gas, all fees will be consumed! To create provable "memberOf" relationships on chain, it's rather advisable to rely on Merkle tree roots and   proofs generated on the client side that are provided as negligible sized CALLDATA arrays.
 
 [Security Considerations &mdash; Solidity 0.8.13 documentation](https://docs.soliditylang.org/en/v0.8.13/security-considerations.html#gas-limit-and-loops)
 
@@ -787,94 +347,27 @@ https://medium.com/coinmonks/8-security-vulnerabilities-in-ethereum-smart-contra
 
 ### Unexpected selfdestruct effects & the fallback function
 
-If operating correctly, contracts are great for keeping funds at a safe place. To ensure that an internal payment split always executes at a  fair rate, one might come up with the idea to only accept divisible amounts of money to not leave any traces of dust (tiny amounts of ether) behind. There is no way to refuse funds sent to a contract, though. Even if the builtin `receive` or default function reverts, other contracts can deposit funds using a call to their own `selfdestruct` function and setting the contract under attack as a recipient. Besides, miners or validators can set any address as the the recipient for their block rewards which completely circumvents any condition put in place by the contract author. Lastly, ether can be deposited at addresses before contracts are deployed to them; by frontrunning the contracts' construction transactions attackers can leave money at the address they will be deployed at - which is quite simple to predict when observing deterministic `CREATE2` instructions.
+If operating correctly, contracts are great for keeping funds in a safe place. Even harder than keeping money in contracts, is to refuse it: in Ethereum it's virtually impossible to do so. Even if a contract's `receive` or default function reverts, other contracts can deposit funds using a call to their own `selfdestruct` function and setting the contract under attack as a recipient. A `Bequeather` with an instance of `IDontWantYourMoney` as their `heir` will "send" their money when they are selfdestructed and there's no way, `heir` could reject that gratuity: 
 
 ```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-
 contract Bequeather {
-  event Received(uint256 amount);
-
   address payable public _heir;
-
-  constructor(address payable heir) {
-    _heir = heir;
-  }
-
-  receive() external payable {
-    emit Received(msg.value);
-  }
-
   function farewell() public {
     selfdestruct(_heir);
   }
 }
 
-
-//SPDX-License-Identifier: MIT
-pragma solidity >=0.8.13;
-
 contract IDontWantYourMoney {
-  error NoMoneyAccepted();
-
   receive() external payable {
-    revert NoMoneyAccepted();
-  }
-}
-
-```
-
-A `Bequeather` with an instance of `IDontWantYourMoney` as their `heir` will "send" their money when they are selfdestructed and there's no way, `heir` could reject that gratuity. 
-
-If your contract is supposed to receive plain money, Solidity historically offers two options, one of them being the default `fallback` function that's recommended to be replaced by the more concise `receive` function nowadays. The reason for having a dedicated receive function is rooted in interface confusion mistakes. A transaction that's pointed to a non-existent function on a smart contract gets routed to a defined fallback. Since each function internally is described as a hash over their ABI call signature, users could accidentally call the fallback function when operating on a deprecated or faulty ABI description.
-
-```solidity
-//SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-
-contract SignedDepositor {
-  struct Deposit {
-    uint256 amount;
-    int256 purpose;
-  }
-
-  event GrantReceived(uint256 amount);
-  event Deposited(address depositor, uint256 amount, int256 purpose);
-
-  mapping(address => Deposit[]) public _deposits;
-
-  fallback() external payable {
-    emit GrantReceived(msg.value);
-  }
-
-  function deposit(int256 purpose) external payable {
-    _deposits[msg.sender].push(
-      Deposit({ amount: msg.value, purpose: purpose })
-    );
-    emit Deposited(msg.sender, msg.value, purpose);
+    //funds still arrive when forwarded from the bequeather's selfdestruct
+    revert "I don't want your money";
   }
 }
 ```
 
-Notice the `int96` type of the `purpose` argument. If someone were to confuse it when calling the `deposit` function, the funds sent along would be deposited into the contract without `deposit` ever having been called. Users may run into this issue when they rely on ABI descriptions provided by outdated SDKs, e.g. like this one, assumeably from a previous version of the contract:
+Additionally, block producers can set any address as the the recipient for their block rewards which circumvents any refusal code put in place by the contract author. Lastly, ether can be deposited at addresses before contracts are even deployed to them; by frontrunning the contracts' construction transactions attackers can leave money at the address they will be deployed at, e.g. by precomputing deterministic `CREATE2` deployment transactions.
 
-```json
-{
-      "inputs": [
-        {
-          //this is wrong:
-          "internalType": "uint256",
-          "type": "uint256",
-          "name": "purpose"
-        }
-      ],
-      "name": "deposit",
-      "outputs": [],
-      "stateMutability": "payable",
-      "type": "function"
-    }
-```
+Solidity historically offers two options that allow contracts to "officially" receive funds,  one of them being the default `fallback` function, that's nowadays highly recommended to be replaced by a dedicated `receive` function. The main reason for this are  interface confusion mistakes. Any transaction that's pointed to a non-existent function gets routed to the default fallback. Since each function internally is described as a hash over its ABI call signature, users could accidentally call the fallback function when using a deprecated or faulty ABI description.
 
 [not-so-smart-contracts/incorrect_interface at master · crytic/not-so-smart-contracts · GitHub](https://github.com/crytic/not-so-smart-contracts/tree/master/incorrect_interface)
 
@@ -959,8 +452,8 @@ https://dasp.co/#item-4
 https://twitter.com/noxx3xxon/status/1525977094668308480?s=20&t=dDP7a7m7UNwp8Z9MwRNwaw
 
 The low-level functions call, delegatecall and staticcall return true as
- their first return value if the called account is non-existent, as part
- of the design of EVM. Existence must be checked prior to calling if 
+their first return value if the called account is non-existent, as part
+of the design of EVM. Existence must be checked prior to calling if
 desired [Expressions and Control Structures &mdash; Solidity 0.5.8 documentation](https://solidity.readthedocs.io/en/v0.5.8/control-structures.html#error-handling-assert-require-revert-and-exceptions)
 
 ### Have a fallback withdrawal to avoid locking tokens
@@ -1143,7 +636,7 @@ https://tenderly.co/
 
 - [simple-security-toolkit/pre-launch-security-checklist.md at main · nascentxyz/simple-security-toolkit · GitHub](https://github.com/nascentxyz/simple-security-toolkit/blob/main/pre-launch-security-checklist.md)
 
-- 
+-
 
 ## Verify your contracts by other parties
 
@@ -1175,7 +668,7 @@ Runbooks
 
 [Runbook - AWS Well-Architected Framework](https://wa.aws.amazon.com/wat.concept.runbook.en.html)
 
-Slither printer: 
+Slither printer:
 
 [Printer documentation · crytic/slither Wiki · GitHub](https://github.com/crytic/slither/wiki/Printer-documentation)
 
@@ -1195,7 +688,7 @@ Slither printer:
 
 ### Preparing for due diligence processes
 
-  [Public Smart Contract Audits and Security Reviews | ConsenSys Diligence](https://consensys.net/diligence/audits/)
+[Public Smart Contract Audits and Security Reviews | ConsenSys Diligence](https://consensys.net/diligence/audits/)
 
 ## Integrate with DeFI protocols safely
 
@@ -1211,10 +704,10 @@ Slither printer:
 
 https://twitter.com/0xfoobar/status/1532767295927361536?s=20&t=dDP7a7m7UNwp8Z9MwRNwaw
 
-be careful when using SafeERC20 with non compliant token which has a 
-non-reverting fallback function because SafeERC20 functions such as 
-safeTransferFrom will give no indication that transferFrom is not 
-implemented in the token and the fallback function will be called 
+be careful when using SafeERC20 with non compliant token which has a
+non-reverting fallback function because SafeERC20 functions such as
+safeTransferFrom will give no indication that transferFrom is not
+implemented in the token and the fallback function will be called
 instead silently, see: [OpenZeppelin/openzeppelin-contracts#1769](https://github.com/OpenZeppelin/openzeppelin-contracts/issues/1769)
 
 ### Price Manipulation and Flashloan attacks
@@ -1269,9 +762,9 @@ https://twitter.com/kelvinfichter/status/1534636743223386119?s=20&t=dDP7a7m7UNwp
 
 https://medium.com/mycrypto/the-magic-of-digital-signatures-on-ethereum-98fe184dc9c7
 
-Since [EIP-155](https://eips.ethereum.org/EIPS/eip-155), we also use the chain ID to calculate the `v` value. This prevents replay attacks across different chains: 
-Atransaction signed for Ethereum cannot be used for Ethereum Classic, 
-and vice versa. Currently, this is only used for signing transaction 
+Since [EIP-155](https://eips.ethereum.org/EIPS/eip-155), we also use the chain ID to calculate the `v` value. This prevents replay attacks across different chains:
+Atransaction signed for Ethereum cannot be used for Ethereum Classic,
+and vice versa. Currently, this is only used for signing transaction
 however, and is not used for signing messages.
 
 ### Example hacks
@@ -1366,7 +859,7 @@ https://medium.com/flashbots/frontrunning-the-mev-crisis-40629a613752
 
 - https://dezentralizedfinance.com/top-10-miner-extractable-value-mev-protection-projects-ecosystem/
 
-- 
+-
 
 https://dasp.co/#item-7
 
